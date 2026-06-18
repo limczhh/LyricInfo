@@ -76,3 +76,8 @@ app/src/main/java/com/lidesheng/lyricinfo/
 - libxposed API 102
 - DexKit 2.2.0（用于查找混淆类）
 - 无其他外部依赖（网络请求使用 HttpURLConnection）
+
+## 参考项目
+
+- [saltplayer_color_ex](https://github.com/CCCC-L/saltplayer_color_ex)
+- [LyricProvider](https://github.com/tomakino/LyricProvider)
