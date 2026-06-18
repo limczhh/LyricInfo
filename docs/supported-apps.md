@@ -7,6 +7,7 @@
 | 网易云音乐 | `com.netease.cloudmusic` | YRC → elrc | EApi 加密接口 |
 | 荣耀定制版网易云 | `com.hihonor.cloudmusic` | YRC → elrc | 同上 |
 | QQ 音乐 | `com.tencent.qqmusic` | QRC → elrc | 3DES 加密接口 |
+| 汽水音乐 | `com.luna.music` | KRC → elrc | 读取本地缓存 KRC 文件 |
 | 椒盐音乐 | `com.salt.music` | 自动检测 → elrc/lrc | DexKit hook 内部歌词类 |
 
 ## 待适配

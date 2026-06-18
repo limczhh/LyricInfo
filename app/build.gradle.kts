@@ -1,6 +1,11 @@
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
 plugins {
     alias(libs.plugins.agp.app)
 }
+
+val buildTimestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmm"))
 
 android {
     namespace = "com.lidesheng.lyricinfo"
@@ -11,7 +16,11 @@ android {
         minSdk = 26
         targetSdk = 37
         versionCode = 1
-        versionName = "1.0"
+        versionName = buildTimestamp
+
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -38,6 +47,14 @@ android {
     lint {
         abortOnError = true
         checkReleaseBuilds = false
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        variant.outputs.forEach { output ->
+            output.outputFileName.set("lyricinfo-${buildTimestamp}-${variant.name}.apk")
+        }
     }
 }
 
