@@ -1,0 +1,1 @@
+-keep class com.lidesheng.lyricinfo.lite.HookEntry { *; }

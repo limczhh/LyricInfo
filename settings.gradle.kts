@@ -25,3 +25,7 @@ dependencyResolutionManagement {
 rootProject.name = "LyricInfo"
 
 include(":app")
+include(":lite")
+
+
+
