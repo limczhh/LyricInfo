@@ -1,6 +1,6 @@
 # 适配情况
 
-根据所使用的模块版本（完整版 vs 精简版），适配情况有所不同。
+根据所使用的模块版本适配情况有所不同。
 
 ---
 
@@ -10,10 +10,10 @@
 
 ### 已确认支持的应用
 * **网易云音乐** (`com.netease.cloudmusic`)
-* **荣耀定制版网易云** (`com.hihonor.cloudmusic`)
+* **酷狗音乐** (`com.kugou.android`)
 * **QQ 音乐** (`com.tencent.qqmusic`)
 
-由于精简版为动态作用域（`staticScope = false`），理论上支持任何原生集成了 OPPO 锁屏歌词特性的软件。您可以直接在 LSPosed 作用域内勾选其它音乐软件（如酷狗、酷我等）进行测试。
+理论上支持任何原生集成了 OPPO 锁屏歌词特性的软件。
 
 ---
 
@@ -45,4 +45,3 @@
 1. 在 `app/src/main/java/com/lidesheng/lyricinfo/providers/` 下创建对应播放器的目录，继承并实现 `BaseLyricProvider`（通过 API 获取歌词时）或 `LyricProvider` 接口（需要 hook 获取时）。
 2. 在 `app/src/main/java/com/lidesheng/lyricinfo/HookEntry.kt` 中的 `providers` 列表中注册该新实现的 Provider。
 3. 在 `app/src/main/resources/META-INF/xposed/scope.list` 中添加目标应用的包名。
-

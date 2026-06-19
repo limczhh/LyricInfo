@@ -35,7 +35,7 @@
 取决于音乐软件原生输出的格式（例如网易云），QQ音乐还有 `noLyric` , `lyricType` , `transLyric` , `txtlyric` 等内容：
 ```json
 {
-  "lyric": "[00:16.44]歌词\n[00:16.44]翻译",
+  "lyric": "[00:16.44]歌词",
   "songName": "歌名",
   "artist": "歌手"
 }
