@@ -8,4 +8,5 @@ build
 temp
 app/build
 app/release
+lite/release
 .claude
