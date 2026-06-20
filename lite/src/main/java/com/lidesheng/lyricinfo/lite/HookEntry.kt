@@ -1,7 +1,10 @@
 package com.lidesheng.lyricinfo.lite
 
 import android.util.Log
+import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
+import io.github.libxposed.api.XposedModuleInterface.HotReloadedParam
+import io.github.libxposed.api.XposedModuleInterface.HotReloadingParam
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam
 
@@ -11,43 +14,58 @@ class HookEntry : XposedModule() {
         private const val TAG = "LyricInfoLite"
     }
 
+    private var currentPackageReadyParam: PackageReadyParam? = null
+    private val activeHooks = mutableListOf<XposedInterface.HookHandle>()
+
     override fun onModuleLoaded(param: ModuleLoadedParam) {
-        Log.i(TAG, "[Module] Loaded in process: ${param.processName}")
+        Log.i(TAG, "[Module] Loaded in ${param.processName}")
     }
 
     override fun onPackageReady(param: PackageReadyParam) {
-        Log.i(TAG, "[Module] Injecting into package: ${param.packageName}")
+        Log.i(TAG, "[Module] ${param.packageName}")
+        currentPackageReadyParam = param
+        installSystemPropertiesHook(param)
+    }
+
+    private fun installSystemPropertiesHook(param: PackageReadyParam) {
         try {
             val systemPropertiesClass = Class.forName("android.os.SystemProperties", true, param.classLoader)
-            
-            // 1. Hook SystemProperties.get(String, String)
+
             val getMethodWith2Args = systemPropertiesClass.getMethod("get", String::class.java, String::class.java)
             deoptimize(getMethodWith2Args)
-            hook(getMethodWith2Args).intercept { chain ->
+            activeHooks.add(hook(getMethodWith2Args).intercept { chain ->
                 val key = chain.args[0] as? String
-                if (key == "ro.build.version.oplus.api") {
-                    Log.i(TAG, "[Hook] SystemProperties.get(ro.build.version.oplus.api, default) -> return 37")
-                    "37"
-                } else {
-                    chain.proceed()
-                }
-            }
+                if (key == "ro.build.version.oplus.api") "37" else chain.proceed()
+            })
 
-            // 2. Hook SystemProperties.get(String)
             val getMethodWith1Arg = systemPropertiesClass.getMethod("get", String::class.java)
             deoptimize(getMethodWith1Arg)
-            hook(getMethodWith1Arg).intercept { chain ->
+            activeHooks.add(hook(getMethodWith1Arg).intercept { chain ->
                 val key = chain.args[0] as? String
-                if (key == "ro.build.version.oplus.api") {
-                    Log.i(TAG, "[Hook] SystemProperties.get(ro.build.version.oplus.api) -> return 37")
-                    "37"
-                } else {
-                    chain.proceed()
-                }
-            }
-            Log.i(TAG, "[Module] SystemProperties hooks installed successfully")
+                if (key == "ro.build.version.oplus.api") "37" else chain.proceed()
+            })
+
+            Log.i(TAG, "[Hook] ✓ SystemProperties")
         } catch (e: Exception) {
-            Log.e(TAG, "[Module] Failed to install SystemProperties hooks", e)
+            Log.e(TAG, "[Hook] ✗ SystemProperties", e)
+        }
+    }
+
+    override fun onHotReloading(param: HotReloadingParam): Boolean {
+        param.setSavedInstanceState(currentPackageReadyParam)
+        return true
+    }
+
+    override fun onHotReloaded(param: HotReloadedParam) {
+        val packageParam = param.savedInstanceState as? PackageReadyParam
+        currentPackageReadyParam = packageParam
+
+        param.oldHookHandles.forEach { it.unhook() }
+        activeHooks.clear()
+
+        if (packageParam != null) {
+            Log.i(TAG, "[Module] Hot reloaded")
+            installSystemPropertiesHook(packageParam)
         }
     }
 }

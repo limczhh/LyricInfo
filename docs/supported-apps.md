@@ -10,10 +10,9 @@
 
 ### 已确认支持的应用
 * **网易云音乐** (`com.netease.cloudmusic`)
-* **酷狗音乐** (`com.kugou.android`)
 * **QQ 音乐** (`com.tencent.qqmusic`)
 
-理论上支持任何原生集成了 OPPO 锁屏歌词特性的软件。
+理论上支持任何原生集成了 OPPO 锁屏歌词特性的软件，酷狗音乐 (`com.kugou.android`)不会检测 `ro.build.version.oplus.api` ，新版本酷狗音乐在其他 OEM 上都会携带 lyricInfo 内容。
 
 ---
 

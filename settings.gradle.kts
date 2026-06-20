@@ -26,6 +26,7 @@ rootProject.name = "LyricInfo"
 
 include(":app")
 include(":lite")
+include(":debug")
 
 
 
