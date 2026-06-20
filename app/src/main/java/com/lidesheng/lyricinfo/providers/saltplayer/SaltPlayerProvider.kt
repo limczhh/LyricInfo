@@ -5,6 +5,7 @@ import android.util.Log
 import com.lidesheng.lyricinfo.core.LyricNormalizer
 import com.lidesheng.lyricinfo.core.LyricProvider
 import com.lidesheng.lyricinfo.core.LyricResult
+import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
 import org.json.JSONObject
@@ -28,6 +29,8 @@ class SaltPlayerProvider : LyricProvider {
 
     private val lyricCache = ConcurrentHashMap<String, LyricResult>()
     private val lastCapturedLyric = AtomicReference<LyricResult?>(null)
+    private val hookHandles = mutableListOf<XposedInterface.HookHandle>()
+    private var currentMediaId: String? = null
 
     override fun onAppLoaded(module: XposedModule, param: PackageLoadedParam) {
         Log.i(TAG, "[Hook] ${param.packageName}")
@@ -36,7 +39,7 @@ class SaltPlayerProvider : LyricProvider {
         try {
             DexkitLoader.load()
         } catch (e: Exception) {
-            Log.e(TAG, "[SaltPlayer] Failed to load DexKit", e)
+            Log.e(TAG, "[SaltPlayer] ✗ DexKit load failed", e)
             return
         }
 
@@ -45,10 +48,21 @@ class SaltPlayerProvider : LyricProvider {
                 hookLyricsConstructor(module, classLoader, bridge)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "[SaltPlayer] Failed to hook lyrics", e)
+            Log.e(TAG, "[SaltPlayer] ✗ Hook lyrics failed", e)
         }
 
         hookMediaMetadataBuilder(module, classLoader)
+    }
+
+    override fun replaceHooks(
+        module: XposedModule,
+        param: PackageLoadedParam,
+        oldHooks: List<XposedInterface.HookHandle>
+    ): List<XposedInterface.HookHandle> {
+        oldHooks.forEach { it.unhook() }
+        hookHandles.clear()
+        onAppLoaded(module, param)
+        return hookHandles.toList()
     }
 
     private fun hookLyricsConstructor(
@@ -59,15 +73,11 @@ class SaltPlayerProvider : LyricProvider {
         try {
             hookNewVersion(module, classLoader, bridge)
         } catch (e: Exception) {
-            Log.d(TAG, "[SaltPlayer] New version hook failed, trying old version", e)
+            Log.d(TAG, "[SaltPlayer] New version failed, trying old")
             hookOldVersion(module, classLoader, bridge)
         }
     }
 
-    /**
-     * SaltPlayer >= 11.0.0: find class using string "LyricsDocument(sourceText=",
-     * hook (String, List) constructor, arg(0) is raw LRC.
-     */
     private fun hookNewVersion(
         module: XposedModule,
         classLoader: ClassLoader,
@@ -81,29 +91,20 @@ class SaltPlayerProvider : LyricProvider {
         val constructor = classLoader.loadClass(classData.name)
             .getConstructor(String::class.java, List::class.java)
 
-        module.hook(constructor).intercept { chain ->
+        val handle = module.hook(constructor).intercept { chain ->
             val rawLrc = chain.getArg(0) as? String ?: return@intercept chain.proceed()
             val normalized = LyricNormalizer.normalize(rawLrc)
             if (normalized != null) {
                 val transFormat = detectTranslationFormat(normalized.lyric)
-                val result = LyricResult(
-                    lyric = normalized.lyric,
-                    format = normalized.format,
-                    translation = transFormat
-                )
-                lastCapturedLyric.set(result)
-                Log.d(TAG, "[SaltPlayer] Captured lyrics: ${result.lyric.length} chars, format=${result.format}")
+                lastCapturedLyric.set(LyricResult(normalized.lyric, normalized.format, transFormat))
+                Log.d(TAG, "[SaltPlayer] ✓ Captured lyrics")
             }
             chain.proceed()
         }
-
-        Log.i(TAG, "[SaltPlayer] Hooked new version lyrics constructor")
+        hookHandles.add(handle)
+        Log.i(TAG, "[SaltPlayer] ✓ Hooked new version constructor")
     }
 
-    /**
-     * SaltPlayer < 11.0.0: find class in androidx.core with 5 fields,
-     * hook constructor(null, String, String), arg(1) is raw LRC.
-     */
     private fun hookOldVersion(
         module: XposedModule,
         classLoader: ClassLoader,
@@ -125,23 +126,18 @@ class SaltPlayerProvider : LyricProvider {
             params.size == 3 && params[1] == String::class.java && params[2] == String::class.java
         }
 
-        module.hook(constructor).intercept { chain ->
+        val handle = module.hook(constructor).intercept { chain ->
             val rawLrc = chain.getArg(1) as? String ?: return@intercept chain.proceed()
             val normalized = LyricNormalizer.normalize(rawLrc)
             if (normalized != null) {
                 val transFormat = detectTranslationFormat(normalized.lyric)
-                val result = LyricResult(
-                    lyric = normalized.lyric,
-                    format = normalized.format,
-                    translation = transFormat
-                )
-                lastCapturedLyric.set(result)
-                Log.d(TAG, "[SaltPlayer] Captured old-version lyrics: ${result.lyric.length} chars, format=${result.format}")
+                lastCapturedLyric.set(LyricResult(normalized.lyric, normalized.format, transFormat))
+                Log.d(TAG, "[SaltPlayer] ✓ Captured lyrics (old)")
             }
             chain.proceed()
         }
-
-        Log.i(TAG, "[SaltPlayer] Hooked old version lyrics constructor")
+        hookHandles.add(handle)
+        Log.i(TAG, "[SaltPlayer] ✓ Hooked old version constructor")
     }
 
     private fun hookMediaMetadataBuilder(module: XposedModule, classLoader: ClassLoader) {
@@ -151,7 +147,7 @@ class SaltPlayerProvider : LyricProvider {
             )
             val buildMethod = builderClass.getDeclaredMethod("build")
 
-            module.hook(buildMethod).intercept { chain ->
+            val handle = module.hook(buildMethod).intercept { chain ->
                 val builder = chain.thisObject
                 val bundleField = builder.javaClass.getDeclaredField("mBundle")
                 bundleField.isAccessible = true
@@ -164,7 +160,11 @@ class SaltPlayerProvider : LyricProvider {
 
                 val songKey = mediaId ?: "$title|$artist|$duration".hashCode().toString()
 
-                // Atomically move captured lyric into cache
+                if (songKey != currentMediaId) {
+                    currentMediaId = songKey
+                    Log.i(TAG, "[Song] $title - $artist")
+                }
+
                 val captured = lastCapturedLyric.getAndSet(null)
                 if (captured != null) {
                     lyricCache[songKey] = captured
@@ -182,21 +182,18 @@ class SaltPlayerProvider : LyricProvider {
                         .toString()
                     builder.javaClass.getMethod("putString", String::class.java, String::class.java)
                         .invoke(builder, LYRIC_INFO_KEY, json)
+                    Log.d(TAG, "[Inject] ✓ $title")
                 }
 
                 chain.proceed()
             }
-
-            Log.i(TAG, "[SaltPlayer] Hooked MediaMetadata.Builder.build()")
+            hookHandles.add(handle)
+            Log.i(TAG, "[Hook] ✓ Builder.build()")
         } catch (e: Exception) {
-            Log.e(TAG, "[SaltPlayer] Failed to hook Builder.build()", e)
+            Log.e(TAG, "[Hook] ✗ Builder.build()", e)
         }
     }
 
-    /**
-     * Detect translation format from interleaved lyrics.
-     * Returns "lrc" or "elrc" if translations exist, "" if not.
-     */
     private fun detectTranslationFormat(lyrics: String): String {
         val lrcTag = Regex("""\[\d{2}:\d{2}\.\d{2,3}]""")
         val elrcTag = Regex("""<\d{2}:\d{2}\.\d{2,3}>""")
@@ -209,7 +206,6 @@ class SaltPlayerProvider : LyricProvider {
 
         for ((_, lines) in groups) {
             if (lines.size < 2) continue
-            // Check translation lines (index 1+) for word-level tags
             for (i in 1 until lines.size) {
                 val body = lines[i].substringAfter("]")
                 if (elrcTag.containsMatchIn(body)) return "elrc"
@@ -222,5 +218,7 @@ class SaltPlayerProvider : LyricProvider {
     override fun onDestroy() {
         lyricCache.clear()
         lastCapturedLyric.set(null)
+        hookHandles.clear()
+        currentMediaId = null
     }
 }
