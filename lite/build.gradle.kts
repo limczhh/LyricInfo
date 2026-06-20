@@ -16,7 +16,7 @@ android {
         applicationId = "com.lidesheng.lyricinfo.lite"
         minSdk = 29
         targetSdk = 37
-        versionCode = 1
+        versionCode = 2
         versionName = buildTimestamp
 
         ndk {
