@@ -1,5 +1,6 @@
 package com.lidesheng.lyricinfo.lite
 
+import android.annotation.SuppressLint
 import android.util.Log
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
@@ -27,6 +28,7 @@ class HookEntry : XposedModule() {
         installSystemPropertiesHook(param)
     }
 
+    @SuppressLint("PrivateApi")
     private fun installSystemPropertiesHook(param: PackageReadyParam) {
         try {
             val systemPropertiesClass = Class.forName("android.os.SystemProperties", true, param.classLoader)

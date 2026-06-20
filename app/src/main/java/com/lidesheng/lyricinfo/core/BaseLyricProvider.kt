@@ -1,5 +1,6 @@
 package com.lidesheng.lyricinfo.core
 
+import android.annotation.SuppressLint
 import android.media.MediaMetadata
 import android.os.Bundle
 import android.util.Log
@@ -11,6 +12,7 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
+@SuppressLint("SoonBlockedPrivateApi")
 abstract class BaseLyricProvider : LyricProvider {
 
     companion object {

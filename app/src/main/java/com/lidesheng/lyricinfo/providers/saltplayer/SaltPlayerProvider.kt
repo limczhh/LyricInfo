@@ -143,7 +143,7 @@ class SaltPlayerProvider : LyricProvider {
     private fun hookMediaMetadataBuilder(module: XposedModule, classLoader: ClassLoader) {
         try {
             val builderClass = Class.forName(
-                "android.media.MediaMetadata\$Builder", false, classLoader
+                $$"android.media.MediaMetadata$Builder", false, classLoader
             )
             val buildMethod = builderClass.getDeclaredMethod("build")
 

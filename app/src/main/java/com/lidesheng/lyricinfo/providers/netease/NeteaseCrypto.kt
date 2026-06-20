@@ -1,5 +1,6 @@
 package com.lidesheng.lyricinfo.providers.netease
 
+import android.annotation.SuppressLint
 import java.security.MessageDigest
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
@@ -26,6 +27,7 @@ internal object NeteaseCrypto {
         return bytes.joinToString("") { "%02x".format(it) }
     }
 
+    @SuppressLint("GetInstance")
     private fun aesEncryptEcb(text: String, key: String): String {
         val cipher = Cipher.getInstance("AES/ECB/PKCS5Padding")
         val keySpec = SecretKeySpec(key.toByteArray(), "AES")

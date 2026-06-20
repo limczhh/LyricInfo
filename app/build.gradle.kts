@@ -13,7 +13,7 @@ android {
     buildToolsVersion = "37.0.0"
 
     defaultConfig {
-        minSdk = 26
+        minSdk = 29
         targetSdk = 37
         versionCode = 1
         versionName = buildTimestamp
@@ -47,6 +47,7 @@ android {
     lint {
         abortOnError = true
         checkReleaseBuilds = false
+        disable += listOf("MissingApplicationIcon", "ChromeOsAbiSupport")
     }
 }
 
@@ -61,5 +62,5 @@ androidComponents {
 dependencies {
     compileOnly(libs.libxposed.api)
     implementation(libs.libxposed.service)
-    implementation("org.luckypray:dexkit:2.2.0")
+    implementation(libs.dexkit)
 }

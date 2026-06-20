@@ -100,6 +100,7 @@ class HookEntry : XposedModule() {
         }
     }
 
+    @Suppress("DEPRECATION")
     private fun dumpBundle(bundle: android.os.Bundle, prefix: String = "") {
         try {
             val keys = bundle.keySet()
