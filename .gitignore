@@ -9,4 +9,8 @@ temp
 app/build
 app/release
 lite/release
+debug/release
 .claude
+CLAUDE.md
+.codegraph
+AGENTS.md
