@@ -55,6 +55,8 @@
 | 小米音乐 | `com.miui.player` | 内部解析 → elrc/lrc | Hook 内部歌词引擎 |
 | 汽水音乐 | `com.luna.music` | KRC → elrc | 读取本地缓存 KRC 文件 |
 | 椒盐音乐 | `com.salt.music` | 自动检测 → elrc/lrc | DexKit hook |
+| LX Music | `cn.toside.music.mobile` | 自动检测 → elrc/lrc | Hook 内部歌词类 |
+| IKun Music | `com.ikunshare.music.mobile` | 自动检测 → elrc/lrc | 同上 |
 
 ### 精简版 (`:lite`) 支持列表
 * **理论上支持任何官方已针对 ColorOS 16 锁屏岛开发了歌词下发逻辑的音乐播放器**（包括网易云音乐、QQ音乐等）。
@@ -72,7 +74,7 @@ LyricInfo/
 │   ├── src/main/java/.../
 │   │   ├── HookEntry.kt         ← 模块入口，分发至各大 App Provider
 │   │   ├── core/                ← 核心格式检测及转换转换器
-│   │   └── providers/           ← 针对各家音乐 API/缓存的适配实现
+│   │   └── providers/           ← 针对各家音乐 API/缓存/内部 hook 的适配实现
 ├── lite/                        ← 精简版模块 (com.lidesheng.lyricinfo.lite)
 │   ├── src/main/java/.../
 │   │   └── HookEntry.kt         ← 极简入口，仅 Hook SystemProperties
