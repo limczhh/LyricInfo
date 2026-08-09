@@ -75,15 +75,7 @@ abstract class BaseLyricProvider : LyricProvider {
 
                 val result = lyricCache[songKey]
                 if (result != null) {
-                    val json = JSONObject()
-                        .put("songName", title ?: "")
-                        .put("artist", artist ?: "")
-                        .put("songId", mediaId ?: "")
-                        .put("lyric", result.lyric)
-                        .put("format", result.format)
-                        .put("translation", result.translation)
-                        .toString()
-                    bundle.putString(LYRIC_INFO_KEY, json)
+                    bundle.putString(LYRIC_INFO_KEY, buildLyricInfoJson(title, artist, mediaId, result))
                     Log.d(TAG, "[Inject] ✓ $title")
                 }
 
@@ -124,18 +116,13 @@ abstract class BaseLyricProvider : LyricProvider {
 
                     val result = lyricCache[songKey]
                     if (result != null) {
-                        val json = JSONObject()
-                            .put("songName", title ?: "")
-                            .put("artist", artist ?: "")
-                            .put("songId", mediaId ?: "")
-                            .put("lyric", result.lyric)
-                            .put("format", result.format)
-                            .put("translation", result.translation)
-                            .toString()
                         val extrasField = metadata.javaClass.getDeclaredField("mBundle")
                         extrasField.isAccessible = true
                         val extras = extrasField.get(metadata) as Bundle
-                        extras.putString(LYRIC_INFO_KEY, json)
+                        extras.putString(
+                            LYRIC_INFO_KEY,
+                            buildLyricInfoJson(title, artist, mediaId, result)
+                        )
                         Log.d(TAG, "[Inject] ✓ $title (setMetadata)")
                     }
                 }
@@ -179,6 +166,23 @@ abstract class BaseLyricProvider : LyricProvider {
     }
 
     protected abstract fun fetchLyric(mediaId: String, title: String?, artist: String?): LyricResult?
+
+    private fun buildLyricInfoJson(
+        title: String?,
+        artist: String?,
+        mediaId: String?,
+        result: LyricResult,
+    ): String {
+        return JSONObject()
+            .put("songName", title ?: "")
+            .put("artist", artist ?: "")
+            .put("songId", mediaId ?: "")
+            .put("lyric", result.lyric)
+            .put("format", result.format)
+            .put("translation", result.translation)
+            .put("romaji", result.romaji)
+            .toString()
+    }
 
     override fun onDestroy() {
         executor.shutdownNow()

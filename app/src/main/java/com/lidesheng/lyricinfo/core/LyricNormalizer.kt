@@ -255,50 +255,98 @@ object LyricNormalizer {
     }
 
     /**
-     * Merge normalized original and translation lyrics by timestamp.
+     * Merge normalized original / translation / romaji lyrics by timestamp.
      *
-     * For each timestamp present in the original, if the translation has lines with the same
-     * timestamp, those translation lines are appended immediately after the original lines.
-     * Format tags (elrc `<mm:ss.xx>` or lrc) in each line are preserved as-is.
+     * Output order for each original line:
+     * - If [romaji] is present: **translation → original → romaji**
+     * - Else if [translation] only: **original → translation** (legacy)
+     * - Else: original only
      *
-     * @param original  Normalized lyric string (elrc or lrc)
-     * @param translation Normalized translation lyric string (elrc or lrc)
-     * @return Merged lyric string
+     * Matching uses a 1000ms fuzzy window; secondary tracks get their line-level
+     * timestamps rewritten to the original line's timestamp.
      */
-    fun merge(original: String, translation: String): String {
-        val transByTime = parseLinesByTimestampMs(translation)
-        if (transByTime.isEmpty()) {
-            Log.d("LyricNormalizer", "merge: 翻译为空，跳过合并")
+    fun merge(
+        original: String,
+        translation: String? = null,
+        romaji: String? = null,
+    ): String {
+        val transByTime = translation?.takeIf { it.isNotBlank() }
+            ?.let { parseLinesByTimestampMs(it) }
+            .orEmpty()
+        val romaByTime = romaji?.takeIf { it.isNotBlank() }
+            ?.let { parseLinesByTimestampMs(it) }
+            .orEmpty()
+
+        if (transByTime.isEmpty() && romaByTime.isEmpty()) {
+            Log.d("LyricNormalizer", "merge: 无翻译/罗马音，跳过合并")
             return original
         }
+
         val transTimes = transByTime.keys.sorted()
+        val romaTimes = romaByTime.keys.sorted()
+        val hasRomaji = romaByTime.isNotEmpty()
 
         val origCount = original.lines().count { it.isNotBlank() }
-        val transCount = transTimes.size
-        var matched = 0
+        var matchedTrans = 0
+        var matchedRoma = 0
 
         val output = StringBuilder()
         for (line in original.lines()) {
-            output.appendLine(line)
+            if (line.isBlank()) {
+                output.appendLine(line)
+                continue
+            }
             val tsMs = extractLineTimestampMs(line)
-            if (tsMs < 0) continue
-            // 模糊匹配：找时间差在 1000ms 内的翻译
-            val closest = transTimes.minByOrNull { kotlin.math.abs(it - tsMs) }
-            if (closest != null && kotlin.math.abs(closest - tsMs) <= 1000) {
-                val transLines = transByTime[closest]
-                if (transLines != null) {
-                    matched++
-                    for (tLine in transLines) {
-                        // 替换翻译行的时间戳为原文的时间戳，确保接收端能匹配
-                        val replaced = replaceTimestamp(tLine, tsMs)
-                        output.appendLine(replaced)
+
+            val matchedTransLines = if (tsMs >= 0) {
+                findClosestLines(transByTime, transTimes, tsMs)?.also { matchedTrans++ }
+            } else null
+            val matchedRomaLines = if (tsMs >= 0) {
+                findClosestLines(romaByTime, romaTimes, tsMs)?.also { matchedRoma++ }
+            } else null
+
+            if (hasRomaji) {
+                // 翻译 + 原文 + 罗马音
+                if (matchedTransLines != null && tsMs >= 0) {
+                    for (tLine in matchedTransLines) {
+                        output.appendLine(replaceTimestamp(tLine, tsMs))
+                    }
+                }
+                output.appendLine(line)
+                if (matchedRomaLines != null && tsMs >= 0) {
+                    for (rLine in matchedRomaLines) {
+                        output.appendLine(replaceTimestamp(rLine, tsMs))
+                    }
+                }
+            } else {
+                // 原文 + 翻译（兼容旧消费者）
+                output.appendLine(line)
+                if (matchedTransLines != null && tsMs >= 0) {
+                    for (tLine in matchedTransLines) {
+                        output.appendLine(replaceTimestamp(tLine, tsMs))
                     }
                 }
             }
         }
 
-        Log.d("LyricNormalizer", "merge: 原文${origCount}行, 翻译${transCount}个时间戳, 匹配${matched}行")
+        Log.d(
+            "LyricNormalizer",
+            "merge: 原文${origCount}行, 翻译匹配${matchedTrans}, 罗马音匹配${matchedRoma}, " +
+                "order=${if (hasRomaji) "trans+orig+roma" else "orig+trans"}"
+        )
         return output.toString().trimEnd()
+    }
+
+    private fun findClosestLines(
+        byTime: Map<Long, MutableList<String>>,
+        times: List<Long>,
+        tsMs: Long,
+        windowMs: Long = 1000,
+    ): List<String>? {
+        if (byTime.isEmpty() || times.isEmpty()) return null
+        val closest = times.minByOrNull { kotlin.math.abs(it - tsMs) } ?: return null
+        if (kotlin.math.abs(closest - tsMs) > windowMs) return null
+        return byTime[closest]
     }
 
     /**

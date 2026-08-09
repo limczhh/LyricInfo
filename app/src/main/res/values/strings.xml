@@ -1,4 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_description">歌词获取器</string>
+    <string name="app_name">LyricInfo</string>
+    <string name="app_description">歌词获取器 — 将歌词注入 MediaMetadata.extras.lyricInfo</string>
+    <string name="listener_service_label">LyricInfo 媒体会话读取</string>
+    <string name="ui_title">实时歌词</string>
+    <string name="ui_waiting_session">等待音乐应用开始播放…</string>
+    <string name="ui_waiting_lyric">已连接媒体会话，等待 lyricInfo…</string>
+    <string name="ui_receiving">正在接收 lyricInfo</string>
+    <string name="ui_permission_needed">需要开启「通知使用权」才能读取 MediaSession 中的歌词</string>
+    <string name="ui_open_permission">开启通知使用权</string>
+    <string name="ui_refresh">刷新会话</string>
+    <string name="ui_no_title">未知曲目</string>
+    <string name="ui_no_artist">未知艺人</string>
+    <string name="ui_format">格式: %1$s</string>
+    <string name="ui_source">来源: %1$s</string>
+    <string name="ui_position">%1$s / %2$s</string>
+    <string name="ui_empty_lyrics">（无歌词行）</string>
+    <string name="ui_hint_module">请先在 LSPosed 中启用 LyricInfo 模块并勾选音乐应用作用域</string>
 </resources>

@@ -179,6 +179,7 @@ class SaltPlayerProvider : LyricProvider {
                         .put("lyric", result.lyric)
                         .put("format", result.format)
                         .put("translation", result.translation)
+                        .put("romaji", result.romaji)
                         .toString()
                     builder.javaClass.getMethod("putString", String::class.java, String::class.java)
                         .invoke(builder, LYRIC_INFO_KEY, json)

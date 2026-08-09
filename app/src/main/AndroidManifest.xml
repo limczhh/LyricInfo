@@ -3,8 +3,31 @@
 
     <application
         android:description="@string/app_description"
-        android:label="LyricInfo"
-        android:theme="@android:style/Theme.DeviceDefault"
-    />
-        
+        android:label="@string/app_name"
+        android:theme="@style/Theme.LyricInfo"
+        android:supportsRtl="true">
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Capability token for MediaSessionManager.getActiveSessions -->
+        <service
+            android:name=".service.LyricMediaListenerService"
+            android:exported="true"
+            android:label="@string/listener_service_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+    </application>
+
 </manifest>

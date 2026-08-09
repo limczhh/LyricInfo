@@ -6,3 +6,7 @@
     public <init>();
 }
 -keep class org.luckypray.dexkit.** { *; }
+
+# UI entry points
+-keep class com.lidesheng.lyricinfo.ui.MainActivity { *; }
+-keep class com.lidesheng.lyricinfo.service.LyricMediaListenerService { *; }

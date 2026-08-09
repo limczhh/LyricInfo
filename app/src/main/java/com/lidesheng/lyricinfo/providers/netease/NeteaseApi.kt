@@ -29,9 +29,14 @@ internal object NeteaseApi {
             val lrcRaw = json.optJSONObject("lrc")?.optString("lyric")
             val yrcRaw = json.optJSONObject("yrc")?.optString("lyric")
             val tlyricRaw = json.optJSONObject("tlyric")?.optString("lyric")
+            // 罗马音：优先逐字 yromalrc，其次行级 romalrc
+            val yromalrcRaw = json.optJSONObject("yromalrc")?.optString("lyric")
+            val romalrcRaw = json.optJSONObject("romalrc")?.optString("lyric")
 
             val lrc = lrcRaw?.takeIf { it.isNotBlank() }
             val translation = tlyricRaw?.takeIf { it.isNotBlank() }
+            val romajiRaw = yromalrcRaw?.takeIf { it.isNotBlank() }?.let { filterYrcLines(it) }
+                ?: romalrcRaw?.takeIf { it.isNotBlank() }
 
             // yrc 是混合格式：前几行是 JSON（元数据），后面是真正的逐字格式 [ms,dur](ms,dur,text)text
             // 过滤掉 JSON 行，保留逐字格式行
@@ -44,15 +49,27 @@ internal object NeteaseApi {
                 else -> return null
             } ?: return null
 
-            // Normalize and merge translation (tlyric is usually standard LRC)
             val transNormalized = translation?.let { LyricNormalizer.normalize(it) }
-            val merged = if (transNormalized != null) {
-                LyricNormalizer.merge(normalized.lyric, transNormalized.lyric)
-            } else {
-                normalized.lyric
-            }
+            val romaNormalized = romajiRaw?.let { LyricNormalizer.normalize(it) }
 
-            LyricResult(lyric = merged, format = normalized.format, translation = transNormalized?.format ?: "")
+            val merged = LyricNormalizer.merge(
+                original = normalized.lyric,
+                translation = transNormalized?.lyric,
+                romaji = romaNormalized?.lyric,
+            )
+
+            Log.d(
+                TAG,
+                "[Netease] lyric ok format=${normalized.format} " +
+                    "trans=${transNormalized != null} roma=${romaNormalized != null}"
+            )
+
+            LyricResult(
+                lyric = merged,
+                format = normalized.format,
+                translation = transNormalized?.format ?: "",
+                romaji = romaNormalized?.format ?: "",
+            )
         } catch (e: Exception) {
             Log.e(TAG, "[Netease] API error: ${e.message}")
             null

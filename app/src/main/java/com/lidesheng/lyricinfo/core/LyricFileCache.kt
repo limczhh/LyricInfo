@@ -15,7 +15,8 @@ internal class LyricFileCache(private val cacheDir: File) {
             LyricResult(
                 lyric = lyric,
                 format = json.optString("format", "lrc"),
-                translation = json.optString("translation", "lrc")
+                translation = json.optString("translation", ""),
+                romaji = json.optString("romaji", ""),
             )
         } catch (e: Exception) {
             Log.w(TAG, "[FileCache] Read failed: $songKey", e)
@@ -30,6 +31,7 @@ internal class LyricFileCache(private val cacheDir: File) {
                 .put("lyric", result.lyric)
                 .put("format", result.format)
                 .put("translation", result.translation)
+                .put("romaji", result.romaji)
                 .toString()
             cacheFile(songKey).writeText(json)
         } catch (e: Exception) {

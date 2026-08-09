@@ -18,9 +18,9 @@ internal object QQMusicApi {
 
     /**
      * 获取歌词。返回 LyricResult：
-     * - lyric: 原文 + 翻译按时间戳合并（QRC 自动转为 elrc 逐字歌词优先，否则标准 LRC）
-     * - format: 歌词格式（elrc 或 lrc）
-     * - translation: 翻译行的格式指示（elrc 或 lrc），无翻译时默认 lrc
+     * - lyric: 按时间戳合并（有罗马音时为 翻译+原文+罗马音，否则 原文+翻译）
+     * - format: 原文格式（elrc 或 lrc）
+     * - translation / romaji: 对应行的格式指示，无则空串
      */
     fun fetchLyric(musicId: String): LyricResult? {
         return try {
@@ -33,27 +33,36 @@ internal object QQMusicApi {
 
             if (lrc.isNullOrBlank()) return null
 
-            // Try to extract translation (contentts tag, usually standard LRC format)
-            val translationContent = extractCData(raw, "contentts")
-            val decryptedTrans = translationContent?.let { QrcDecrypter.decrypt(it) }
-            val translationLrc = decryptedTrans?.takeIf { it.isNotBlank() }
+            // contentts = 翻译；contentroma / contentromaing = 罗马音（若接口提供）
+            val translationLrc = extractCData(raw, "contentts")
+                ?.let { QrcDecrypter.decrypt(it) }
+                ?.takeIf { it.isNotBlank() }
+            val romajiLrc = (
+                extractCData(raw, "contentroma")
+                    ?: extractCData(raw, "contentromaing")
+                    ?: extractCData(raw, "contentro")
+                )
+                ?.let { QrcDecrypter.decrypt(it) }
+                ?.takeIf { it.isNotBlank() }
 
             val rawLyric = rawQrc?.takeIf { it.isNotBlank() } ?: lrc
             val normalized = LyricNormalizer.normalize(rawLyric)
                 ?: return null
 
-            // Normalize and merge translation
             val transNormalized = translationLrc?.let { LyricNormalizer.normalize(it) }
-            val merged = if (transNormalized != null) {
-                LyricNormalizer.merge(normalized.lyric, transNormalized.lyric)
-            } else {
-                normalized.lyric
-            }
+            val romaNormalized = romajiLrc?.let { LyricNormalizer.normalize(it) }
+
+            val merged = LyricNormalizer.merge(
+                original = normalized.lyric,
+                translation = transNormalized?.lyric,
+                romaji = romaNormalized?.lyric,
+            )
 
             LyricResult(
                 lyric = merged,
                 format = normalized.format,
-                translation = transNormalized?.format ?: ""
+                translation = transNormalized?.format ?: "",
+                romaji = romaNormalized?.format ?: "",
             )
         } catch (e: Exception) {
             Log.e(TAG, "[QQMusic] API error: ${e.message}")
