@@ -256,6 +256,7 @@ class MiuiPlayerProvider : LyricProvider {
             val json = JSONObject()
                 .put("songName", title ?: "")
                 .put("artist", artist ?: "")
+                .put("album", bundle.getString(MediaMetadata.METADATA_KEY_ALBUM) ?: "")
                 .put("songId", mediaId ?: "")
                 .put("lyric", result.lyric)
                 .put("format", result.format)

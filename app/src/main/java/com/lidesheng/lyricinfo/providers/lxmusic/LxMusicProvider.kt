@@ -194,6 +194,7 @@ open class LxMusicProvider(
         val json = JSONObject()
             .put("songName", bundle.getString(MediaMetadata.METADATA_KEY_TITLE) ?: "")
             .put("artist", bundle.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: "")
+            .put("album", bundle.getString(MediaMetadata.METADATA_KEY_ALBUM) ?: "")
             .put("songId", bundle.getString(MediaMetadata.METADATA_KEY_MEDIA_ID) ?: "")
             .put("lyric", result.lyric)
             .put("format", result.format)
