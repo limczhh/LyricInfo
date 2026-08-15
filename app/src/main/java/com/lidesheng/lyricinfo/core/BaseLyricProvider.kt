@@ -28,6 +28,7 @@ abstract class BaseLyricProvider : LyricProvider {
         private const val LYRIC_INFO_KEY = "lyricInfo"
     }
 
+    @Volatile
     private var currentMediaId: String? = null
     private val executor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "LyricInfo-${javaClass.simpleName}").apply { isDaemon = true }
@@ -68,29 +69,7 @@ abstract class BaseLyricProvider : LyricProvider {
                 bundleField.isAccessible = true
                 val bundle = bundleField.get(builder) as Bundle
 
-                val track = resolveTrackMetadata(bundle)
-                val songKey = track.cacheKey
-
-                if (songKey != currentMediaId) {
-                    currentMediaId = songKey
-                    Log.i(TAG, "[Song] ${track.songName} - ${track.artist}")
-                    fetchLyricAsync(songKey, track.songName, track.artist)
-                }
-
-                val result = lyricCache[songKey]
-                if (result != null) {
-                    val json = JSONObject()
-                        .put("songName", track.songName)
-                        .put("artist", track.artist)
-                        .put("album", track.album)
-                        .put("songId", track.songId)
-                        .put("lyric", result.lyric)
-                        .put("format", result.format)
-                        .put("translation", result.translation)
-                        .toString()
-                    bundle.putString(LYRIC_INFO_KEY, json)
-                    Log.d(TAG, "[Inject] ✓ ${track.songName}")
-                }
+                injectLyricInfo(bundle)
 
                 chain.proceed()
             }
@@ -114,32 +93,7 @@ abstract class BaseLyricProvider : LyricProvider {
                     val metaBundleField = metadata.javaClass.getDeclaredField("mBundle")
                     metaBundleField.isAccessible = true
                     val bundle = metaBundleField.get(metadata) as Bundle
-                    val track = resolveTrackMetadata(bundle)
-                    val songKey = track.cacheKey
-
-                    if (songKey != currentMediaId) {
-                        currentMediaId = songKey
-                        Log.i(TAG, "[Song] ${track.songName} - ${track.artist} (setMetadata)")
-                        fetchLyricAsync(songKey, track.songName, track.artist)
-                    }
-
-                    val result = lyricCache[songKey]
-                    if (result != null) {
-                        val json = JSONObject()
-                            .put("songName", track.songName)
-                            .put("artist", track.artist)
-                            .put("album", track.album)
-                            .put("songId", track.songId)
-                            .put("lyric", result.lyric)
-                            .put("format", result.format)
-                            .put("translation", result.translation)
-                            .toString()
-                        val extrasField = metadata.javaClass.getDeclaredField("mBundle")
-                        extrasField.isAccessible = true
-                        val extras = extrasField.get(metadata) as Bundle
-                        extras.putString(LYRIC_INFO_KEY, json)
-                        Log.d(TAG, "[Inject] ✓ ${track.songName} (setMetadata)")
-                    }
+                    injectLyricInfo(bundle, " (setMetadata)")
                 }
 
                 chain.proceed()
@@ -151,7 +105,42 @@ abstract class BaseLyricProvider : LyricProvider {
         }
     }
 
-    protected open fun resolveTrackMetadata(bundle: Bundle): TrackMetadata {
+    /**
+     * Adds LyricInfo to a metadata bundle before the target media session receives it.
+     * Providers with a support-library MediaSession can reuse this path as well.
+     */
+    protected fun injectLyricInfo(bundle: Bundle, logSuffix: String = "") {
+        val track = resolveTrackMetadata(bundle) ?: return
+        requestLyric(track, logSuffix)
+
+        val result = lyricCache[track.cacheKey] ?: return
+        val json = JSONObject()
+            .put("songName", track.songName)
+            .put("artist", track.artist)
+            .put("album", track.album)
+            .put("songId", track.songId)
+            .put("lyric", result.lyric)
+            .put("format", result.format)
+            .put("translation", result.translation)
+            .toString()
+        bundle.putString(LYRIC_INFO_KEY, json)
+        Log.d(TAG, "[Inject] ✓ ${track.songName}$logSuffix")
+    }
+
+    /**
+     * Starts lyric loading for a trusted track identity. Providers may call this
+     * after resolving metadata asynchronously from a stable source such as an ID.
+     */
+    protected fun requestLyric(track: TrackMetadata, logSuffix: String = "") {
+        val songKey = track.cacheKey
+        if (songKey != currentMediaId) {
+            currentMediaId = songKey
+            Log.i(TAG, "[Song] ${track.songName} - ${track.artist}$logSuffix")
+        }
+        fetchLyricAsync(songKey, track.songName, track.artist)
+    }
+
+    protected open fun resolveTrackMetadata(bundle: Bundle): TrackMetadata? {
         val mediaId = bundle.getString(MediaMetadata.METADATA_KEY_MEDIA_ID).orEmpty()
         val songName = bundle.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty()
         val artist = bundle.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty()

@@ -1,12 +1,16 @@
 package com.lidesheng.lyricinfo.providers.qqmusic
 
+import android.media.MediaMetadata
+import android.os.Bundle
 import android.util.Log
 import com.lidesheng.lyricinfo.core.BaseLyricProvider
 import com.lidesheng.lyricinfo.core.LyricResult
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class QQMusicProvider : BaseLyricProvider() {
 
@@ -19,12 +23,17 @@ class QQMusicProvider : BaseLyricProvider() {
     override val packageName = PACKAGE_NAME
     override val processNames = listOf(PACKAGE_NAME, PLAYER_SERVICE)
 
-    private val currentTrack = AtomicReference<TrackMetadata?>(null)
     private val qqHookHandles = mutableListOf<XposedInterface.HookHandle>()
+    private val metadataCache = ConcurrentHashMap<String, TrackMetadata>()
+    private val metadataFetchingIds = ConcurrentHashMap.newKeySet<String>()
+    private val missingMediaIdLogged = AtomicBoolean(false)
+    private val metadataExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "LyricInfo-QQMusicMetadata").apply { isDaemon = true }
+    }
 
     override fun onAppLoaded(module: XposedModule, param: PackageLoadedParam) {
         super.onAppLoaded(module, param)
-        hookCurrentSong(module, param.defaultClassLoader)
+        hookCompatMetadata(module, param.defaultClassLoader)
     }
 
     override fun replaceHooks(
@@ -34,76 +43,138 @@ class QQMusicProvider : BaseLyricProvider() {
     ): List<XposedInterface.HookHandle> {
         val baseHooks = super.replaceHooks(module, param, oldHooks)
         qqHookHandles.clear()
-        hookCurrentSong(module, param.defaultClassLoader)
+        hookCompatMetadata(module, param.defaultClassLoader)
         return baseHooks + qqHookHandles
     }
 
     override fun onDestroy() {
         qqHookHandles.forEach { it.unhook() }
         qqHookHandles.clear()
-        currentTrack.set(null)
+        metadataExecutor.shutdownNow()
+        metadataCache.clear()
+        metadataFetchingIds.clear()
         super.onDestroy()
     }
 
-    override fun resolveTrackMetadata(bundle: android.os.Bundle): TrackMetadata {
-        return currentTrack.get() ?: super.resolveTrackMetadata(bundle)
+    override fun resolveTrackMetadata(bundle: Bundle): TrackMetadata? {
+        val songId = readMediaId(bundle)
+        if (songId.isBlank()) {
+            if (missingMediaIdLogged.compareAndSet(false, true)) {
+                Log.w(TAG, "[QQMusic] No stable Media ID; skip LyricInfo")
+            }
+            return null
+        }
+
+        metadataCache[songId]?.let { return it }
+        requestSongMetadata(songId)
+        return null
     }
 
-    private fun hookCurrentSong(module: XposedModule, classLoader: ClassLoader) {
-        try {
-            val controllerClass = classLoader.loadClass(
-                "com.tencent.qqmusicplayerprocess.servicenew.mediasession.s"
-            )
-            val songInfoClass = classLoader.loadClass(
-                "com.tencent.qqmusicplayerprocess.songinfo.SongInfo"
-            )
-            val method = controllerClass.getDeclaredMethod("v", songInfoClass)
+    private fun readMediaId(bundle: Bundle): String {
+        val stringId = bundle.getCharSequence(MediaMetadata.METADATA_KEY_MEDIA_ID)
+            ?.toString()
+            ?.trim()
+            .orEmpty()
+        val songId = if (stringId.isNotBlank()) {
+            stringId
+        } else {
+            runCatching { bundle.getLong(MediaMetadata.METADATA_KEY_MEDIA_ID) }
+                .getOrDefault(0L)
+                .takeIf { it > 0L }
+                ?.toString()
+                .orEmpty()
+        }
+        return songId.takeIf { it.toLongOrNull()?.let { value -> value > 0L } == true }.orEmpty()
+    }
 
-            val handle = module.hook(method).intercept { chain ->
-                val songInfo = chain.getArg(0)
-                if (songInfo == null) {
-                    currentTrack.set(null)
-                } else {
-                    val track = readTrackMetadata(songInfo)
-                    if (track != null) {
-                        val previous = currentTrack.getAndSet(track)
-                        if (previous?.songId != track.songId) {
-                            Log.i(TAG, "[QQMusic] [Song] ${track.songName} - ${track.artist}")
-                        }
-                    } else {
-                        currentTrack.set(null)
-                    }
+    private fun requestSongMetadata(songId: String) {
+        if (metadataCache.containsKey(songId) || !metadataFetchingIds.add(songId)) return
+
+        Log.i(TAG, "[QQMusic] Query song metadata: id=$songId")
+        metadataExecutor.execute {
+            try {
+                val metadata = QQMusicApi.fetchSongMetadata(songId)
+                if (metadata == null) {
+                    Log.w(TAG, "[QQMusic] No song metadata: id=$songId")
+                    return@execute
+                }
+
+                val track = TrackMetadata(
+                    songName = metadata.songName,
+                    artist = metadata.artist,
+                    album = metadata.album,
+                    songId = metadata.songId
+                )
+                metadataCache[songId] = track
+                Log.i(TAG, "[QQMusic] [Song] ${track.songName} - ${track.artist}")
+                requestLyric(track, " (metadata)")
+            } catch (e: Exception) {
+                Log.e(TAG, "[QQMusic] ✗ Query song metadata: id=$songId", e)
+            } finally {
+                metadataFetchingIds.remove(songId)
+            }
+        }
+    }
+
+    private fun hookCompatMetadata(module: XposedModule, classLoader: ClassLoader) {
+        try {
+            val builderClass = classLoader.loadClass(
+                "android.support.v4.media.MediaMetadataCompat\$Builder"
+            )
+            val buildMethod = builderClass.getDeclaredMethod("build")
+            val bundleField = builderClass.getDeclaredField("mBundle").apply {
+                isAccessible = true
+            }
+            module.deoptimize(buildMethod)
+
+            val handle = module.hook(buildMethod).intercept { chain ->
+                try {
+                    val bundle = bundleField.get(chain.thisObject) as Bundle
+                    injectLyricInfo(bundle, " (compatBuilder)")
+                } catch (e: Exception) {
+                    Log.e(TAG, "[QQMusic] ✗ Inject Compat Builder", e)
                 }
                 chain.proceed()
             }
             qqHookHandles.add(handle)
-            Log.i(TAG, "[QQMusic] ✓ Hooked current SongInfo: ${method.name}")
+            Log.i(TAG, "[QQMusic] ✓ Hooked MediaMetadataCompat.Builder.build()")
         } catch (e: Exception) {
-            Log.e(TAG, "[QQMusic] ✗ Hook current SongInfo", e)
+            Log.e(TAG, "[QQMusic] ✗ Hook Compat Builder", e)
         }
-    }
 
-    private fun readTrackMetadata(songInfo: Any): TrackMetadata? {
-        return try {
-            val songId = (songInfo.javaClass.getMethod("x2").invoke(songInfo) as? Number)
-                ?.toLong()
-                ?.takeIf { it != 0L }
-                ?.toString()
-                ?: return null
-            TrackMetadata(
-                songName = invokeString(songInfo, "Z2").orEmpty(),
-                artist = invokeString(songInfo, "E3").orEmpty(),
-                album = invokeString(songInfo, "u1").orEmpty(),
-                songId = songId
+        try {
+            val metadataClass = classLoader.loadClass(
+                "android.support.v4.media.MediaMetadataCompat"
             )
-        } catch (e: Exception) {
-            Log.e(TAG, "[QQMusic] ✗ Read SongInfo", e)
-            null
-        }
-    }
+            val sessionClass = classLoader.loadClass(
+                "android.support.v4.media.session.MediaSessionCompat"
+            )
+            val setMetadataMethod = sessionClass.getDeclaredMethod(
+                "setMetadata",
+                metadataClass
+            )
+            val bundleField = metadataClass.getDeclaredField("mBundle").apply {
+                isAccessible = true
+            }
+            module.deoptimize(setMetadataMethod)
 
-    private fun invokeString(songInfo: Any, methodName: String): String? {
-        return songInfo.javaClass.getMethod(methodName).invoke(songInfo) as? String
+            val handle = module.hook(setMetadataMethod).intercept { chain ->
+                try {
+                    val metadata = chain.getArg(0)
+                    if (metadata != null) {
+                        val bundle = bundleField.get(metadata) as Bundle
+                        injectLyricInfo(bundle, " (compatSession)")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "[QQMusic] ✗ Inject Compat Session", e)
+                }
+                chain.proceed()
+            }
+            qqHookHandles.add(handle)
+            Log.i(TAG, "[QQMusic] ✓ Hooked MediaSessionCompat.setMetadata()")
+        } catch (e: Exception) {
+            Log.e(TAG, "[QQMusic] ✗ Hook Compat Session", e)
+        }
     }
 
     override fun fetchLyric(mediaId: String, title: String?, artist: String?): LyricResult? {
