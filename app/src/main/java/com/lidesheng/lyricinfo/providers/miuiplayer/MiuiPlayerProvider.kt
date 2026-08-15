@@ -1,6 +1,7 @@
 package com.lidesheng.lyricinfo.providers.miuiplayer
 
 import android.media.MediaMetadata
+import android.os.Bundle
 import android.util.Log
 import com.lidesheng.lyricinfo.core.LyricProvider
 import com.lidesheng.lyricinfo.core.LyricResult
@@ -8,6 +9,7 @@ import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
 import org.json.JSONObject
+import java.lang.reflect.Method
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 
@@ -17,12 +19,34 @@ class MiuiPlayerProvider : LyricProvider {
         private const val TAG = "LyricInfo"
         private const val LYRIC_INFO_KEY = "lyricInfo"
         private const val PACKAGE_NAME = "com.miui.player"
+        private const val CUSTOM_FIELD_TITLE = "android.media.metadata.CUSTOM_FIELD_TITLE"
+        private const val LOADING_LYRIC = "歌词正在加载中。。。"
     }
 
     override val packageName = PACKAGE_NAME
 
-    private val lyricCache = ConcurrentHashMap<String, LyricResult>()
-    private val lastCapturedLyric = AtomicReference<LyricResult?>(null)
+    private data class TrackMetadata(
+        val songName: String,
+        val artist: String,
+        val album: String,
+        val songId: String
+    ) {
+        val key: String
+            get() = if (songId.isNotEmpty()) {
+                "id:$songId"
+            } else {
+                "meta:$songName|$artist|$album"
+            }
+    }
+
+    private data class CapturedLyric(
+        val metadata: TrackMetadata,
+        val result: LyricResult
+    )
+
+    private val lyricCache = ConcurrentHashMap<String, CapturedLyric>()
+    private val lastCapturedLyric = AtomicReference<CapturedLyric?>(null)
+    private val lastSourceTrack = AtomicReference<TrackMetadata?>(null)
     private val hookHandles = mutableListOf<XposedInterface.HookHandle>()
     private var currentMediaId: String? = null
     private var lastParsedSongKey: String? = null
@@ -34,6 +58,7 @@ class MiuiPlayerProvider : LyricProvider {
         val classLoader = param.defaultClassLoader
 
         hookXiaomiMusicEngine(module, classLoader)
+        hookSongInfoMetadata(module, classLoader)
         hookMediaMetadataBuilder(module, classLoader)
     }
 
@@ -62,6 +87,9 @@ class MiuiPlayerProvider : LyricProvider {
             // 2. 拦截获取当前歌词的方法，抓取包含全量歌词的 Lyric 对象
             val lyricClass = Class.forName("com.lyricengine.base.Lyric", false, classLoader)
             val getLyricMethod = remoteLyricCtrlClass.getDeclaredMethod("getLyricSentenceIndex", Long::class.javaPrimitiveType, lyricClass)
+            val titleField = lyricClass.getDeclaredField("mTitle").apply { isAccessible = true }
+            val artistField = lyricClass.getDeclaredField("mArtist").apply { isAccessible = true }
+            val albumField = lyricClass.getDeclaredField("mAlbum").apply { isAccessible = true }
             
             val getLyricHandle = module.hook(getLyricMethod).intercept { chain ->
                 val result = chain.proceed() // 执行原方法获得索引
@@ -69,29 +97,36 @@ class MiuiPlayerProvider : LyricProvider {
                 try {
                     val lyricObj = chain.args[1]
                     if (lyricObj != null) {
-                        val titleField = lyricClass.getDeclaredField("mTitle").apply { isAccessible = true }
-                        val artistField = lyricClass.getDeclaredField("mArtist").apply { isAccessible = true }
                         val title = titleField.get(lyricObj) as? String ?: ""
                         val artist = artistField.get(lyricObj) as? String ?: ""
+                        val album = albumField.get(lyricObj) as? String ?: ""
+                        val lyricTrack = createTrackMetadata(title, artist, album, null)
+                        if (lyricTrack == null) {
+                            return@intercept result
+                        }
+                        val track = mergeTrackMetadata(lastSourceTrack.get(), lyricTrack)
+                        lastSourceTrack.set(track)
 
-                        val songKey = "$title|$artist"
+                        val songKey = track.key
                         
                         // 避免对同一首歌的 Lyric 对象进行重复的反射解析
-                        if (songKey != lastParsedSongKey && title.isNotEmpty()) {
+                        if (songKey != lastParsedSongKey) {
                             lastParsedSongKey = songKey
                             val elrcLyric = buildElrcLyric(lyricObj, lyricClass)
                             if (elrcLyric.isNotEmpty()) {
-                                lastCapturedLyric.set(LyricResult(elrcLyric, "elrc", ""))
-                                Log.d(TAG, "[MiPlayer] ✓ Parsed full ELRC lyrics for: $title")
+                                lastCapturedLyric.set(
+                                    CapturedLyric(track, LyricResult(elrcLyric, "elrc", ""))
+                                )
+                                Log.d(TAG, "[MiPlayer] ✓ Parsed full ELRC lyrics for: ${track.songName}")
                                 
-                                // 主动刷新 MediaSession
+                                // 主动刷新 MediaSession。字段来自 Lyric/SongInfo，而不是 metadata。
                                 val session = lastMediaSession
                                 val meta = lastMediaMetadata
                                 if (session != null && meta != null) {
                                     try {
                                         val bundleField = meta.javaClass.getDeclaredField("mBundle").apply { isAccessible = true }
-                                        val bundle = bundleField.get(meta) as android.os.Bundle
-                                        injectLyricToBundle(bundle)
+                                        val bundle = bundleField.get(meta) as Bundle
+                                        injectLyricToBundle(bundle, track)
                                         
                                         val setMetaMethod = session.javaClass.getDeclaredMethod("setMetadata", MediaMetadata::class.java)
                                         setMetaMethod.invoke(session, meta)
@@ -113,33 +148,143 @@ class MiuiPlayerProvider : LyricProvider {
             Log.i(TAG, "[Hook] ✓ Xiaomi Music Engine")
         } catch (e: Exception) {
             Log.e(TAG, "[Hook] ✗ Xiaomi Music Engine failed", e)
-            hookFallback(module, classLoader)
         }
     }
 
-    private fun hookFallback(module: XposedModule, classLoader: ClassLoader) {
+    private fun hookSongInfoMetadata(module: XposedModule, classLoader: ClassLoader) {
         try {
             val remoteCtrlMgrClass = Class.forName("com.tencent.qqmusiccommon.util.music.RemoteControlManager", false, classLoader)
             val songInfoClass = Class.forName("com.tencent.qqmusic.core.song.SongInfo", false, classLoader)
             val updateMetaMethod = remoteCtrlMgrClass.getDeclaredMethod("updataMetaData", songInfoClass, String::class.java)
+            val getNameMethod = songInfoClass.getDeclaredMethod("getName")
+            val getSingerMethod = songInfoClass.getDeclaredMethod("getSinger")
+            val getAlbumMethod = songInfoClass.getDeclaredMethod("getAlbum")
+            val getMediaMidMethod = songInfoClass.getDeclaredMethod("getMediaMid")
+            val getIdMethod = songInfoClass.getDeclaredMethod("getId")
 
             val handle = module.hook(updateMetaMethod).intercept { chain ->
                 try {
+                    val songInfo = chain.args[0]
+                    val track = if (songInfo != null) {
+                        readSongInfoMetadata(
+                            songInfo,
+                            getNameMethod,
+                            getSingerMethod,
+                            getAlbumMethod,
+                            getMediaMidMethod,
+                            getIdMethod
+                        )
+                    } else {
+                        null
+                    }
+                    if (track != null) {
+                        lastSourceTrack.set(track)
+                    }
+
                     val lyricStr = chain.args[1] as? String
-                    if (!lyricStr.isNullOrEmpty() && lyricStr != "NEED_NOT_UPDATE_TITLE") {
-                        lastCapturedLyric.set(LyricResult(lyricStr, "lrc", ""))
-                        Log.d(TAG, "[MiPlayer] ✓ Fallback captured line lyric")
+                    if (track != null && !lyricStr.isNullOrEmpty() &&
+                        lyricStr != "NEED_NOT_UPDATE_TITLE" && lyricStr != LOADING_LYRIC
+                    ) {
+                        lastCapturedLyric.set(
+                            CapturedLyric(track, LyricResult(lyricStr, "lrc", ""))
+                        )
+                        Log.d(TAG, "[MiPlayer] ✓ Captured line lyric with SongInfo: ${track.songName}")
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "[MiPlayer] ✗ Fallback parsing failed", e)
+                    Log.e(TAG, "[MiPlayer] ✗ SongInfo metadata parsing failed", e)
                 }
                 chain.proceed()
             }
             hookHandles.add(handle)
-            Log.i(TAG, "[Hook] ✓ Xiaomi Music Fallback")
+            Log.i(TAG, "[Hook] ✓ Xiaomi SongInfo metadata")
         } catch (e: Exception) {
-            Log.e(TAG, "[Hook] ✗ Xiaomi Music Fallback failed", e)
+            Log.e(TAG, "[Hook] ✗ Xiaomi SongInfo metadata failed", e)
         }
+    }
+
+    private fun readSongInfoMetadata(
+        songInfo: Any,
+        getNameMethod: Method,
+        getSingerMethod: Method,
+        getAlbumMethod: Method,
+        getMediaMidMethod: Method,
+        getIdMethod: Method
+    ): TrackMetadata? {
+        val songName = getNameMethod.invoke(songInfo) as? String
+        val artist = getSingerMethod.invoke(songInfo) as? String
+        val album = getAlbumMethod.invoke(songInfo) as? String
+        val mediaMid = getMediaMidMethod.invoke(songInfo) as? String
+        val id = (getIdMethod.invoke(songInfo) as? Long)
+            ?.takeIf { it != 0L }
+            ?.toString()
+        return createTrackMetadata(songName, artist, album, mediaMid.orEmpty().ifBlank { id })
+    }
+
+    private fun createTrackMetadata(
+        songName: String?,
+        artist: String?,
+        album: String?,
+        songId: String?
+    ): TrackMetadata? {
+        val cleanSongName = songName?.trim().orEmpty()
+        if (cleanSongName.isEmpty()) {
+            return null
+        }
+        return TrackMetadata(
+            songName = cleanSongName,
+            artist = artist?.trim().orEmpty(),
+            album = album?.trim().orEmpty(),
+            songId = songId?.trim().orEmpty()
+        )
+    }
+
+    private fun mergeTrackMetadata(
+        primary: TrackMetadata?,
+        fallback: TrackMetadata
+    ): TrackMetadata {
+        if (primary == null || !sameTrack(primary, fallback)) {
+            return fallback
+        }
+        return TrackMetadata(
+            songName = primary.songName.ifEmpty { fallback.songName },
+            artist = primary.artist.ifEmpty { fallback.artist },
+            album = primary.album.ifEmpty { fallback.album },
+            songId = primary.songId.ifEmpty { fallback.songId }
+        )
+    }
+
+    private fun sameTrack(first: TrackMetadata, second: TrackMetadata): Boolean {
+        if (first.songId.isNotEmpty() && second.songId.isNotEmpty() && first.songId == second.songId) {
+            return true
+        }
+        if (first.songName.isEmpty() || second.songName.isEmpty() || first.songName != second.songName) {
+            return false
+        }
+        if (first.artist.isNotEmpty() && second.artist.isNotEmpty() && first.artist != second.artist) {
+            return false
+        }
+        return first.album.isEmpty() || second.album.isEmpty() || first.album == second.album
+    }
+
+    private fun trackFromBundle(bundle: Bundle): TrackMetadata? {
+        val title = bundle.getString(CUSTOM_FIELD_TITLE).takeUnless { it.isNullOrBlank() }
+            ?: bundle.getString(MediaMetadata.METADATA_KEY_TITLE)
+        val artist = bundle.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)
+            .takeUnless { it.isNullOrBlank() }
+            ?: bundle.getString(MediaMetadata.METADATA_KEY_ARTIST)
+        val album = bundle.getString(MediaMetadata.METADATA_KEY_ALBUM)
+        val mediaId = bundle.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)
+        return createTrackMetadata(title, artist, album, mediaId)
+    }
+
+    private fun findCachedLyric(bundle: Bundle): CapturedLyric? {
+        val sourceTrack = lastSourceTrack.get()
+        if (sourceTrack != null && trackFromBundle(bundle)?.let { sameTrack(sourceTrack, it) } == true) {
+            return lyricCache[sourceTrack.key]
+        }
+
+        val bundleTrack = trackFromBundle(bundle) ?: return null
+        return lyricCache.values.firstOrNull { sameTrack(it.metadata, bundleTrack) }
     }
 
     private fun buildElrcLyric(lyricObj: Any, lyricClass: Class<*>): String {
@@ -203,7 +348,7 @@ class MiuiPlayerProvider : LyricProvider {
             val buildHandle = module.hook(buildMethod).intercept { chain ->
                 val builder = chain.thisObject
                 val bundleField = builder.javaClass.getDeclaredField("mBundle").apply { isAccessible = true }
-                val bundle = bundleField.get(builder) as android.os.Bundle
+                val bundle = bundleField.get(builder) as Bundle
 
                 injectLyricToBundle(bundle)
                 chain.proceed()
@@ -220,7 +365,7 @@ class MiuiPlayerProvider : LyricProvider {
                 
                 if (metadata != null) {
                     val bundleField = metadata.javaClass.getDeclaredField("mBundle").apply { isAccessible = true }
-                    val bundle = bundleField.get(metadata) as android.os.Bundle
+                    val bundle = bundleField.get(metadata) as Bundle
                     injectLyricToBundle(bundle)
                 }
                 chain.proceed()
@@ -233,34 +378,33 @@ class MiuiPlayerProvider : LyricProvider {
         }
     }
 
-    private fun injectLyricToBundle(bundle: android.os.Bundle) {
-        val mediaId = bundle.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)
-        val title = bundle.getString(MediaMetadata.METADATA_KEY_TITLE)
-        val artist = bundle.getString(MediaMetadata.METADATA_KEY_ARTIST)
-        val duration = bundle.getLong(MediaMetadata.METADATA_KEY_DURATION)
-
-        val songKey = mediaId ?: "$title|$artist|$duration".hashCode().toString()
-
-        if (songKey != currentMediaId) {
-            currentMediaId = songKey
-            Log.i(TAG, "[Song] $title - $artist")
-        }
-
+    private fun injectLyricToBundle(bundle: Bundle, preferredTrack: TrackMetadata? = null) {
         val captured = lastCapturedLyric.getAndSet(null)
         if (captured != null) {
-            lyricCache[songKey] = captured
+            lyricCache[captured.metadata.key] = captured
         }
 
-        val result = lyricCache[songKey]
-        if (result != null) {
+        val pendingTrackMatchesBundle = captured != null &&
+            trackFromBundle(bundle)?.let { sameTrack(captured.metadata, it) } == true
+        val payload = when {
+            preferredTrack != null -> lyricCache[preferredTrack.key]
+            pendingTrackMatchesBundle -> lyricCache[captured!!.metadata.key]
+            else -> findCachedLyric(bundle)
+        }
+        if (payload != null) {
+            val track = payload.metadata
+            if (track.key != currentMediaId) {
+                currentMediaId = track.key
+                Log.i(TAG, "[Song] ${track.songName} - ${track.artist}")
+            }
             val json = JSONObject()
-                .put("songName", title ?: "")
-                .put("artist", artist ?: "")
-                .put("album", bundle.getString(MediaMetadata.METADATA_KEY_ALBUM) ?: "")
-                .put("songId", mediaId ?: "")
-                .put("lyric", result.lyric)
-                .put("format", result.format)
-                .put("translation", result.translation)
+                .put("songName", track.songName)
+                .put("artist", track.artist)
+                .put("album", track.album)
+                .put("songId", track.songId)
+                .put("lyric", payload.result.lyric)
+                .put("format", payload.result.format)
+                .put("translation", payload.result.translation)
                 .toString()
             bundle.putString(LYRIC_INFO_KEY, json)
         }
@@ -272,6 +416,7 @@ class MiuiPlayerProvider : LyricProvider {
         hookHandles.clear()
         currentMediaId = null
         lastParsedSongKey = null
+        lastSourceTrack.set(null)
         lastMediaSession = null
         lastMediaMetadata = null
     }
