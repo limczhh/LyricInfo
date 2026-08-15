@@ -28,7 +28,7 @@
 | QQ 音乐 | `com.tencent.qqmusic` | QRC → elrc | 3DES 加密接口 |
 | 酷狗音乐 | `com.kugou.android` | 原生获取 | 独立 Hook `SystemUtils` 绕过校验 |
 | 小米音乐 | `com.miui.player` | 内部解析 → elrc/lrc | Hook 内部歌词引擎 (MusicEngine) |
-| 汽水音乐 | `com.luna.music` | KRC → elrc | 读取本地缓存 KRC 文件 |
+| 汽水音乐 | `com.luna.music` | KRC → elrc | Hook `Track`/`TrackLyric`，本地 KRC 缓存兜底 |
 | 椒盐音乐 | `com.salt.music` | 自动检测 → elrc/lrc | DexKit hook 内部歌词类 |
 | LX Music | `cn.toside.music.mobile` | 自动检测 → elrc/lrc | Hook 内部歌词类 |
 | IKun Music | `com.ikunshare.music.mobile` | 自动检测 → elrc/lrc | 同上 |
