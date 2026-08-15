@@ -131,7 +131,7 @@ abstract class BaseLyricProvider : LyricProvider {
      * Starts lyric loading for a trusted track identity. Providers may call this
      * after resolving metadata asynchronously from a stable source such as an ID.
      */
-    protected fun requestLyric(track: TrackMetadata, logSuffix: String = "") {
+    protected open fun requestLyric(track: TrackMetadata, logSuffix: String = "") {
         val songKey = track.cacheKey
         if (songKey != currentMediaId) {
             currentMediaId = songKey
