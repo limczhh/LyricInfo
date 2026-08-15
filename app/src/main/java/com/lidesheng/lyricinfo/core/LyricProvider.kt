@@ -6,6 +6,8 @@ import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
 
 interface LyricProvider {
     val packageName: String
+    val packageNames: List<String>
+        get() = listOf(packageName)
     val processNames: List<String>
         get() = listOf(packageName)
     fun onAppLoaded(module: XposedModule, param: PackageLoadedParam)

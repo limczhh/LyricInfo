@@ -44,7 +44,7 @@ class HookEntry : XposedModule() {
     override fun onPackageLoaded(param: PackageLoadedParam) {
         if (!param.isFirstPackage) return
 
-        val provider = providers.find { it.packageName == param.packageName }
+        val provider = providers.find { param.packageName in it.packageNames }
         if (provider == null) return
 
         if (provider.processNames.none { currentProcessName.startsWith(it) }) return
@@ -72,7 +72,7 @@ class HookEntry : XposedModule() {
         val oldHooks = param.oldHookHandles
 
         if (packageParam != null) {
-            val provider = providers.find { it.packageName == packageParam.packageName }
+            val provider = providers.find { packageParam.packageName in it.packageNames }
             if (provider != null) {
                 if (provider.processNames.none { currentProcessName.startsWith(it) }) return
 

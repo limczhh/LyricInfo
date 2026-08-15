@@ -21,6 +21,7 @@ class NeteaseProvider : BaseLyricProvider() {
     }
 
     override val packageName = PACKAGE_NAME
+    override val packageNames = listOf(PACKAGE_NAME, HONOR_PACKAGE_NAME)
     override val processNames = listOf(PACKAGE_NAME, "$PACKAGE_NAME:play", HONOR_PACKAGE_NAME)
 
     private val compatHookHandles = mutableListOf<XposedInterface.HookHandle>()
