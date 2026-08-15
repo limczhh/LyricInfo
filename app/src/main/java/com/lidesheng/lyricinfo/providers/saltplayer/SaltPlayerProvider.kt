@@ -1,6 +1,5 @@
 package com.lidesheng.lyricinfo.providers.saltplayer
 
-import android.media.MediaMetadata
 import android.util.Log
 import com.lidesheng.lyricinfo.core.LyricNormalizer
 import com.lidesheng.lyricinfo.core.LyricProvider
@@ -19,6 +18,18 @@ import java.util.concurrent.atomic.AtomicReference
 
 class SaltPlayerProvider : LyricProvider {
 
+    private data class SongIdentity(
+        val id: String,
+        val title: String,
+        val artist: String,
+        val album: String
+    )
+
+    private data class CapturedLyric(
+        val songId: String?,
+        val result: LyricResult
+    )
+
     companion object {
         private const val TAG = "LyricInfo"
         private const val LYRIC_INFO_KEY = "lyricInfo"
@@ -28,9 +39,10 @@ class SaltPlayerProvider : LyricProvider {
     override val packageName = PACKAGE_NAME
 
     private val lyricCache = ConcurrentHashMap<String, LyricResult>()
-    private val lastCapturedLyric = AtomicReference<LyricResult?>(null)
+    private val lastCapturedLyric = AtomicReference<CapturedLyric?>(null)
+    private val currentSong = AtomicReference<SongIdentity?>(null)
     private val hookHandles = mutableListOf<XposedInterface.HookHandle>()
-    private var currentMediaId: String? = null
+    private var lastLoggedSongId: String? = null
 
     override fun onAppLoaded(module: XposedModule, param: PackageLoadedParam) {
         Log.i(TAG, "[Hook] ${param.packageName}")
@@ -49,6 +61,12 @@ class SaltPlayerProvider : LyricProvider {
             }
         } catch (e: Exception) {
             Log.e(TAG, "[SaltPlayer] ✗ Hook lyrics failed", e)
+        }
+
+        try {
+            hookCurrentSong(module, classLoader)
+        } catch (e: Exception) {
+            Log.e(TAG, "[SaltPlayer] ✗ Hook current Song failed", e)
         }
 
         hookMediaMetadataBuilder(module, classLoader)
@@ -96,7 +114,12 @@ class SaltPlayerProvider : LyricProvider {
             val normalized = LyricNormalizer.normalize(rawLrc)
             if (normalized != null) {
                 val transFormat = detectTranslationFormat(normalized.lyric)
-                lastCapturedLyric.set(LyricResult(normalized.lyric, normalized.format, transFormat))
+                lastCapturedLyric.set(
+                    CapturedLyric(
+                        currentSong.get()?.id,
+                        LyricResult(normalized.lyric, normalized.format, transFormat)
+                    )
+                )
                 Log.d(TAG, "[SaltPlayer] ✓ Captured lyrics")
             }
             chain.proceed()
@@ -131,13 +154,65 @@ class SaltPlayerProvider : LyricProvider {
             val normalized = LyricNormalizer.normalize(rawLrc)
             if (normalized != null) {
                 val transFormat = detectTranslationFormat(normalized.lyric)
-                lastCapturedLyric.set(LyricResult(normalized.lyric, normalized.format, transFormat))
+                lastCapturedLyric.set(
+                    CapturedLyric(
+                        currentSong.get()?.id,
+                        LyricResult(normalized.lyric, normalized.format, transFormat)
+                    )
+                )
                 Log.d(TAG, "[SaltPlayer] ✓ Captured lyrics (old)")
             }
             chain.proceed()
         }
         hookHandles.add(handle)
         Log.i(TAG, "[SaltPlayer] ✓ Hooked old version constructor")
+    }
+
+    private fun hookCurrentSong(module: XposedModule, classLoader: ClassLoader) {
+        val controllerClass = classLoader.loadClass("com.salt.music.service.MusicController")
+        val songClass = classLoader.loadClass("com.salt.music.data.entry.Song")
+        val primitiveLong = Long::class.javaPrimitiveType
+        val boxedLong = Long::class.javaObjectType
+        val method = controllerClass.declaredMethods.firstOrNull { candidate ->
+            val parameters = candidate.parameterTypes
+            candidate.returnType == Void.TYPE &&
+                parameters.size == 4 &&
+                parameters[0] == songClass &&
+                parameters[1] == primitiveLong &&
+                parameters[2] == primitiveLong &&
+                parameters[3] == boxedLong
+        } ?: error("Current Song transition method not found")
+
+        val handle = module.hook(method).intercept { chain ->
+            val identity = (chain.getArg(0) as? Any)?.let(::readSongIdentity)
+            if (identity != null) {
+                val previous = currentSong.getAndSet(identity)
+                if (previous?.id != identity.id) {
+                    lastCapturedLyric.set(null)
+                    lastLoggedSongId = identity.id
+                    Log.i(TAG, "[Song] ${identity.title} - ${identity.artist}")
+                }
+            }
+            chain.proceed()
+        }
+        hookHandles.add(handle)
+        Log.i(TAG, "[SaltPlayer] ✓ Hooked current Song transition: ${method.name}")
+    }
+
+    private fun readSongIdentity(song: Any): SongIdentity? {
+        val id = invokeSongString(song, "getId")?.takeIf { it.isNotEmpty() } ?: return null
+        return SongIdentity(
+            id = id,
+            title = invokeSongString(song, "getTitle").orEmpty(),
+            artist = invokeSongString(song, "getArtist").orEmpty(),
+            album = invokeSongString(song, "getAlbum").orEmpty()
+        )
+    }
+
+    private fun invokeSongString(song: Any, methodName: String): String? {
+        return runCatching {
+            song.javaClass.getMethod(methodName).invoke(song) as? String
+        }.getOrNull()
     }
 
     private fun hookMediaMetadataBuilder(module: XposedModule, classLoader: ClassLoader) {
@@ -148,42 +223,35 @@ class SaltPlayerProvider : LyricProvider {
             val buildMethod = builderClass.getDeclaredMethod("build")
 
             val handle = module.hook(buildMethod).intercept { chain ->
-                val builder = chain.thisObject
-                val bundleField = builder.javaClass.getDeclaredField("mBundle")
-                bundleField.isAccessible = true
-                val bundle = bundleField.get(builder) as android.os.Bundle
-
-                val mediaId = bundle.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)
-                val title = bundle.getString(MediaMetadata.METADATA_KEY_TITLE)
-                val artist = bundle.getString(MediaMetadata.METADATA_KEY_ARTIST)
-                val duration = bundle.getLong(MediaMetadata.METADATA_KEY_DURATION)
-
-                val songKey = mediaId ?: "$title|$artist|$duration".hashCode().toString()
-
-                if (songKey != currentMediaId) {
-                    currentMediaId = songKey
-                    Log.i(TAG, "[Song] $title - $artist")
+                val identity = currentSong.get() ?: return@intercept chain.proceed()
+                val songKey = identity.id
+                if (songKey != lastLoggedSongId) {
+                    lastLoggedSongId = songKey
+                    Log.i(TAG, "[Song] ${identity.title} - ${identity.artist}")
                 }
 
-                val captured = lastCapturedLyric.getAndSet(null)
-                if (captured != null) {
-                    lyricCache[songKey] = captured
+                val captured = lastCapturedLyric.get()
+                if (captured != null && captured.songId == songKey &&
+                    lastCapturedLyric.compareAndSet(captured, null)
+                ) {
+                    lyricCache[songKey] = captured.result
                 }
 
                 val result = lyricCache[songKey]
                 if (result != null) {
                     val json = JSONObject()
-                        .put("songName", title ?: "")
-                        .put("artist", artist ?: "")
-                        .put("album", bundle.getString(MediaMetadata.METADATA_KEY_ALBUM) ?: "")
-                        .put("songId", mediaId ?: "")
+                        .put("songName", identity.title)
+                        .put("artist", identity.artist)
+                        .put("album", identity.album)
+                        .put("songId", identity.id)
                         .put("lyric", result.lyric)
                         .put("format", result.format)
                         .put("translation", result.translation)
                         .toString()
+                    val builder = chain.thisObject
                     builder.javaClass.getMethod("putString", String::class.java, String::class.java)
                         .invoke(builder, LYRIC_INFO_KEY, json)
-                    Log.d(TAG, "[Inject] ✓ $title")
+                    Log.d(TAG, "[Inject] ✓ ${identity.title}")
                 }
 
                 chain.proceed()
@@ -219,7 +287,8 @@ class SaltPlayerProvider : LyricProvider {
     override fun onDestroy() {
         lyricCache.clear()
         lastCapturedLyric.set(null)
+        currentSong.set(null)
         hookHandles.clear()
-        currentMediaId = null
+        lastLoggedSongId = null
     }
 }
