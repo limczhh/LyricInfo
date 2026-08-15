@@ -3,6 +3,7 @@ package com.lidesheng.lyricinfo.providers.netease
 import android.util.Log
 import com.lidesheng.lyricinfo.core.LyricNormalizer
 import com.lidesheng.lyricinfo.core.LyricResult
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
@@ -13,6 +14,67 @@ internal object NeteaseApi {
 
     private const val TAG = "LyricInfo"
     private const val BASE_URL = "https://interface.music.163.com/eapi/"
+
+    data class SongMetadata(
+        val songId: String,
+        val songName: String,
+        val artist: String,
+        val album: String
+    )
+
+    /**
+     * Resolves the stable Netease song ID to metadata. This deliberately does
+     * not use title or artist from MediaMetadata because Netease can replace
+     * those fields with the current Bluetooth lyric sentence.
+     */
+    fun fetchSongMetadata(musicId: Long): SongMetadata? {
+        return try {
+            val songIds = JSONArray().put(
+                JSONObject().apply {
+                    put("id", musicId.toString())
+                    put("v", "0")
+                }
+            )
+            val params = JSONObject().put("c", songIds.toString())
+            val response = request("v3/song/detail", params.toString())
+            val songs = JSONObject(response).optJSONArray("songs") ?: return null
+            val song = songs.optJSONObject(0) ?: return null
+            val responseId = song.optLong("id", 0L)
+            if (responseId != musicId) return null
+
+            val artist = buildString {
+                val artists = song.optJSONArray("ar") ?: song.optJSONArray("artists")
+                if (artists != null) {
+                    for (index in 0 until artists.length()) {
+                        val name = artists.optJSONObject(index)
+                            ?.optString("name")
+                            .orEmpty()
+                            .trim()
+                        if (name.isNotBlank()) {
+                            if (isNotEmpty()) append(", ")
+                            append(name)
+                        }
+                    }
+                }
+            }.trim()
+            val songName = song.optString("name").trim()
+            val album = (
+                song.optJSONObject("al")?.optString("name")
+                    ?: song.optJSONObject("album")?.optString("name")
+            ).orEmpty().trim()
+            if (songName.isBlank() || artist.isBlank()) return null
+
+            SongMetadata(
+                songId = responseId.toString(),
+                songName = songName,
+                artist = artist,
+                album = album
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "[Netease] Metadata API error: ${e.message}")
+            null
+        }
+    }
 
     fun fetchLyric(musicId: Long): LyricResult? {
         return try {
