@@ -20,7 +20,6 @@ class MiuiPlayerProvider : LyricProvider {
         private const val LYRIC_INFO_KEY = "lyricInfo"
         private const val PACKAGE_NAME = "com.miui.player"
         private const val CUSTOM_FIELD_TITLE = "android.media.metadata.CUSTOM_FIELD_TITLE"
-        private const val LOADING_LYRIC = "歌词正在加载中。。。"
     }
 
     override val packageName = PACKAGE_NAME
@@ -181,15 +180,8 @@ class MiuiPlayerProvider : LyricProvider {
                         lastSourceTrack.set(track)
                     }
 
-                    val lyricStr = chain.args[1] as? String
-                    if (track != null && !lyricStr.isNullOrEmpty() &&
-                        lyricStr != "NEED_NOT_UPDATE_TITLE" && lyricStr != LOADING_LYRIC
-                    ) {
-                        lastCapturedLyric.set(
-                            CapturedLyric(track, LyricResult(lyricStr, "lrc", ""))
-                        )
-                        Log.d(TAG, "[MiPlayer] ✓ Captured line lyric with SongInfo: ${track.songName}")
-                    }
+                    // The second argument is the current notification/status-bar lyric text,
+                    // not the complete lyric. Only Lyric.mSentences may populate lyricInfo.
                 } catch (e: Exception) {
                     Log.e(TAG, "[MiPlayer] ✗ SongInfo metadata parsing failed", e)
                 }
