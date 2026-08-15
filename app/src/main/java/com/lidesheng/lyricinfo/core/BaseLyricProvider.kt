@@ -15,6 +15,14 @@ import java.util.concurrent.Executors
 @SuppressLint("SoonBlockedPrivateApi")
 abstract class BaseLyricProvider : LyricProvider {
 
+    protected data class TrackMetadata(
+        val songName: String,
+        val artist: String,
+        val album: String,
+        val songId: String,
+        val cacheKey: String = songId
+    )
+
     companion object {
         private const val TAG = "LyricInfo"
         private const val LYRIC_INFO_KEY = "lyricInfo"
@@ -60,32 +68,28 @@ abstract class BaseLyricProvider : LyricProvider {
                 bundleField.isAccessible = true
                 val bundle = bundleField.get(builder) as Bundle
 
-                val mediaId = bundle.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)
-                val title = bundle.getString(MediaMetadata.METADATA_KEY_TITLE)
-                val artist = bundle.getString(MediaMetadata.METADATA_KEY_ARTIST)
-                val duration = bundle.getLong(MediaMetadata.METADATA_KEY_DURATION)
-
-                val songKey = mediaId ?: "$title|$artist|$duration".hashCode().toString()
+                val track = resolveTrackMetadata(bundle)
+                val songKey = track.cacheKey
 
                 if (songKey != currentMediaId) {
                     currentMediaId = songKey
-                    Log.i(TAG, "[Song] $title - $artist")
-                    fetchLyricAsync(songKey, title, artist)
+                    Log.i(TAG, "[Song] ${track.songName} - ${track.artist}")
+                    fetchLyricAsync(songKey, track.songName, track.artist)
                 }
 
                 val result = lyricCache[songKey]
                 if (result != null) {
                     val json = JSONObject()
-                        .put("songName", title ?: "")
-                        .put("artist", artist ?: "")
-                        .put("album", bundle.getString(MediaMetadata.METADATA_KEY_ALBUM) ?: "")
-                        .put("songId", mediaId ?: "")
+                        .put("songName", track.songName)
+                        .put("artist", track.artist)
+                        .put("album", track.album)
+                        .put("songId", track.songId)
                         .put("lyric", result.lyric)
                         .put("format", result.format)
                         .put("translation", result.translation)
                         .toString()
                     bundle.putString(LYRIC_INFO_KEY, json)
-                    Log.d(TAG, "[Inject] ✓ $title")
+                    Log.d(TAG, "[Inject] ✓ ${track.songName}")
                 }
 
                 chain.proceed()
@@ -110,26 +114,22 @@ abstract class BaseLyricProvider : LyricProvider {
                     val metaBundleField = metadata.javaClass.getDeclaredField("mBundle")
                     metaBundleField.isAccessible = true
                     val bundle = metaBundleField.get(metadata) as Bundle
-                    val mediaId = bundle.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)
-                    val title = bundle.getString(MediaMetadata.METADATA_KEY_TITLE)
-                    val artist = bundle.getString(MediaMetadata.METADATA_KEY_ARTIST)
-                    val duration = bundle.getLong(MediaMetadata.METADATA_KEY_DURATION)
-
-                    val songKey = mediaId ?: "$title|$artist|$duration".hashCode().toString()
+                    val track = resolveTrackMetadata(bundle)
+                    val songKey = track.cacheKey
 
                     if (songKey != currentMediaId) {
                         currentMediaId = songKey
-                        Log.i(TAG, "[Song] $title - $artist (setMetadata)")
-                        fetchLyricAsync(songKey, title, artist)
+                        Log.i(TAG, "[Song] ${track.songName} - ${track.artist} (setMetadata)")
+                        fetchLyricAsync(songKey, track.songName, track.artist)
                     }
 
                     val result = lyricCache[songKey]
                     if (result != null) {
                         val json = JSONObject()
-                            .put("songName", title ?: "")
-                            .put("artist", artist ?: "")
-                            .put("album", bundle.getString(MediaMetadata.METADATA_KEY_ALBUM) ?: "")
-                            .put("songId", mediaId ?: "")
+                            .put("songName", track.songName)
+                            .put("artist", track.artist)
+                            .put("album", track.album)
+                            .put("songId", track.songId)
                             .put("lyric", result.lyric)
                             .put("format", result.format)
                             .put("translation", result.translation)
@@ -138,7 +138,7 @@ abstract class BaseLyricProvider : LyricProvider {
                         extrasField.isAccessible = true
                         val extras = extrasField.get(metadata) as Bundle
                         extras.putString(LYRIC_INFO_KEY, json)
-                        Log.d(TAG, "[Inject] ✓ $title (setMetadata)")
+                        Log.d(TAG, "[Inject] ✓ ${track.songName} (setMetadata)")
                     }
                 }
 
@@ -149,6 +149,16 @@ abstract class BaseLyricProvider : LyricProvider {
         } catch (e: Exception) {
             Log.e(TAG, "[Hook] ✗ MediaSession.setMetadata()", e)
         }
+    }
+
+    protected open fun resolveTrackMetadata(bundle: Bundle): TrackMetadata {
+        val mediaId = bundle.getString(MediaMetadata.METADATA_KEY_MEDIA_ID).orEmpty()
+        val songName = bundle.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty()
+        val artist = bundle.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty()
+        val album = bundle.getString(MediaMetadata.METADATA_KEY_ALBUM).orEmpty()
+        val duration = bundle.getLong(MediaMetadata.METADATA_KEY_DURATION)
+        val cacheKey = mediaId.ifEmpty { "$songName|$artist|$duration".hashCode().toString() }
+        return TrackMetadata(songName, artist, album, mediaId, cacheKey)
     }
 
     private fun fetchLyricAsync(mediaId: String, title: String?, artist: String?) {
