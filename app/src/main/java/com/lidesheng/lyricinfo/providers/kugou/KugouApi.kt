@@ -38,6 +38,8 @@ internal object KugouApi {
     )
     private const val USER_AGENT =
         "Android15-1070-11083-46-0-DiscoveryDRADProtocol-wifi"
+    private const val LYRIC_USER_AGENT = "KuGou2012-9020-ExpandSearchManager"
+    private const val LYRIC_THASH = "expand_search_manager.cpp:852736169:451"
 
     /** Current and legacy KRC payloads observed in public Kugou clients. */
     private val KRC_XOR_KEYS = listOf(
@@ -52,8 +54,10 @@ internal object KugouApi {
     )
 
     private val KRC_LINE = Regex("""\[\d+,\d+]""")
+    private val KRC_LINE_HEADER = Regex("""\[(\d+),(\d+)]""")
     private val LRC_LINE = Regex("""\[\d{1,3}:\d{2}(?:\.\d{1,3})?]""")
     private val WORD_TAG = Regex("""<\d+,\d+,\d+>""")
+    private const val LANGUAGE_HEADER_PREFIX = "[language:"
 
     data class TrackRequest(
         val identity: String,
@@ -77,9 +81,17 @@ internal object KugouApi {
 
     private data class DownloadedPayload(
         val content: String,
-        val type: String,
-        val translation: String,
-        val translationType: String
+        val type: String
+    )
+
+    private data class EmbeddedTranslation(
+        val content: String,
+        val type: String
+    )
+
+    private data class KrcLine(
+        val startMs: Long,
+        val durationMs: Long
     )
 
     fun fetch(track: TrackRequest): Result? {
@@ -121,19 +133,13 @@ internal object KugouApi {
                 downloaded?.type.orEmpty().isNotBlank() -> downloaded?.type.orEmpty()
                 else -> candidateType
             }
-            val translationPayload = decodePayload(
-                firstString(
-                    candidate,
-                    "contentts",
-                    "trans_content",
-                    "transContent",
-                    "translation"
-                )
-            ) ?: downloaded?.translation
-            val translationType = normalizeType(
-                firstString(candidate, "trans_contenttype", "transContentType", "transtype")
-            ).ifBlank { downloaded?.translationType.orEmpty() }
-                .ifBlank { translationPayload?.let(::detectType).orEmpty() }
+            val embeddedTranslation = if (originalType == "krc") {
+                extractEmbeddedTranslation(content)
+            } else {
+                null
+            }
+            val translationPayload = embeddedTranslation?.content
+            val translationType = embeddedTranslation?.type.orEmpty()
 
             val merged = KrcParser.parseAndMerge(
                 originalType,
@@ -257,7 +263,8 @@ internal object KugouApi {
             "man" to "yes",
             "client" to "pc",
             "keyword" to track.songName,
-            "hash" to track.hash
+            "hash" to track.hash,
+            "lrctxt" to "1"
         )
         if (track.durationMs > 0L) {
             params["timelength"] = (track.durationMs / 1000L).toString()
@@ -321,28 +328,90 @@ internal object KugouApi {
                     val data = response.optJSONObject("data") ?: response
                     val contentValue = firstString(data, "content", "lyric")
                     val decodedContent = decodePayload(contentValue) ?: return@runCatching null
-                    val translationValue = firstString(
-                        data,
-                        "contentts",
-                        "trans_content",
-                        "transContent",
-                        "translation"
-                    )
                     DownloadedPayload(
                         content = decodedContent,
                         type = normalizeType(
                             firstString(data, "fmt", "contenttype", "contentType", "type")
                         ).ifBlank { detectType(decodedContent) },
-                        translation = decodePayload(translationValue).orEmpty(),
-                        translationType = normalizeType(
-                            firstString(data, "trans_contenttype", "transContentType", "transtype")
-                        )
                     )
                 }.getOrNull()
                 if (payload != null) return payload
             }
         }
         return null
+    }
+
+    /**
+     * Kugou can embed translated lines in the decoded KRC payload instead of
+     * returning a second translation field. The language header contains a
+     * Base64-encoded JSON object whose type=1 entry is aligned with KRC lines.
+     */
+    private fun extractEmbeddedTranslation(content: String): EmbeddedTranslation? {
+        val languageHeader = content.lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.startsWith(LANGUAGE_HEADER_PREFIX) && it.endsWith("]") }
+            ?: return null
+        val encoded = languageHeader.substring(
+            LANGUAGE_HEADER_PREFIX.length,
+            languageHeader.length - 1
+        )
+            .takeIf { it.isNotBlank() }
+            ?: return null
+
+        val decoded = runCatching { Base64.decode(encoded, Base64.DEFAULT) }
+            .recoverCatching { Base64.decode(encoded, Base64.URL_SAFE) }
+            .getOrNull()
+            ?: return null
+        val language = runCatching {
+            JSONObject(String(decoded, StandardCharsets.UTF_8))
+        }.getOrNull() ?: return null
+        val languageContent = language.optJSONArray("content") ?: return null
+
+        var translationLines: JSONArray? = null
+        for (index in 0 until languageContent.length()) {
+            val item = languageContent.optJSONObject(index) ?: continue
+            if (item.optInt("type", -1) == 1) {
+                translationLines = item.optJSONArray("lyricContent")
+                    ?.takeIf { it.length() > 0 }
+                if (translationLines != null) break
+            }
+        }
+        val lines = translationLines ?: return null
+
+        val originalLines = content.lineSequence().mapNotNull { rawLine ->
+            val match = KRC_LINE_HEADER.find(rawLine) ?: return@mapNotNull null
+            val startMs = match.groupValues[1].toLongOrNull() ?: return@mapNotNull null
+            val durationMs = match.groupValues[2].toLongOrNull() ?: return@mapNotNull null
+            KrcLine(startMs, durationMs)
+        }.toList()
+        if (originalLines.isEmpty()) return null
+
+        val output = StringBuilder()
+        val count = minOf(originalLines.size, lines.length())
+        for (index in 0 until count) {
+            val translationLine = lines.optJSONArray(index) ?: continue
+            val text = buildString {
+                for (partIndex in 0 until translationLine.length()) {
+                    val part = translationLine.opt(partIndex)
+                    if (part is CharSequence) append(part)
+                }
+            }
+            if (text.isBlank()) continue
+
+            val originalLine = originalLines[index]
+            output.append('[')
+                .append(originalLine.startMs)
+                .append(',')
+                .append(originalLine.durationMs)
+                .append(']')
+                .append(text)
+                .append('\n')
+        }
+
+        return output.toString()
+            .trimEnd()
+            .takeIf { it.isNotBlank() }
+            ?.let { EmbeddedTranslation(it, "krc") }
     }
 
     private fun decodePayload(value: String?): String? {
@@ -449,7 +518,9 @@ internal object KugouApi {
                 requestMethod = "GET"
                 connectTimeout = 10_000
                 readTimeout = 10_000
-                setRequestProperty("User-Agent", USER_AGENT)
+                setRequestProperty("User-Agent", LYRIC_USER_AGENT)
+                setRequestProperty("KG-RC", "1")
+                setRequestProperty("KG-THash", LYRIC_THASH)
                 setRequestProperty("Referer", "https://www.kugou.com/")
             }
             val code = connection.responseCode
