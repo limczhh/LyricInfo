@@ -100,7 +100,7 @@ class QishuiProvider : BaseLyricProvider() {
     override fun requestLyric(track: TrackMetadata, logSuffix: String) {
         // Prime Qishui's own cache synchronously so the current metadata event can inject.
         if (!lyricCache.containsKey(track.cacheKey)) {
-            readCachedLyric(track.songId)?.let { lyricCache[track.cacheKey] = it }
+            readCachedLyric(track.songId)?.let { storeCachedLyric(track, it) }
         }
         super.requestLyric(track, logSuffix)
     }

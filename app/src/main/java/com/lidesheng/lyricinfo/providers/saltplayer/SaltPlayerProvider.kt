@@ -1,6 +1,8 @@
 package com.lidesheng.lyricinfo.providers.saltplayer
 
 import android.util.Log
+import com.lidesheng.lyricinfo.core.LyricCacheEntry
+import com.lidesheng.lyricinfo.core.LyricFileCache
 import com.lidesheng.lyricinfo.core.LyricNormalizer
 import com.lidesheng.lyricinfo.core.LyricProvider
 import com.lidesheng.lyricinfo.core.LyricResult
@@ -13,6 +15,7 @@ import org.luckypray.dexkit.query.FindClass
 import org.luckypray.dexkit.query.matchers.ClassMatcher
 import org.luckypray.dexkit.query.matchers.MethodMatcher
 import org.luckypray.dexkit.query.matchers.MethodsMatcher
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 
@@ -42,10 +45,12 @@ class SaltPlayerProvider : LyricProvider {
     private val lastCapturedLyric = AtomicReference<CapturedLyric?>(null)
     private val currentSong = AtomicReference<SongIdentity?>(null)
     private val hookHandles = mutableListOf<XposedInterface.HookHandle>()
+    private var fileCache: LyricFileCache? = null
     private var lastLoggedSongId: String? = null
 
     override fun onAppLoaded(module: XposedModule, param: PackageLoadedParam) {
         Log.i(TAG, "[Hook] ${param.packageName}")
+        fileCache = LyricFileCache(File(param.applicationInfo.dataDir, "cache/lyric_info"))
         val classLoader = param.defaultClassLoader
 
         try {
@@ -189,6 +194,9 @@ class SaltPlayerProvider : LyricProvider {
                 val previous = currentSong.getAndSet(identity)
                 if (previous?.id != identity.id) {
                     lastCapturedLyric.set(null)
+                    fileCache?.read(identity.id)?.let { cached ->
+                        lyricCache[identity.id] = cached.result
+                    }
                     lastLoggedSongId = identity.id
                     Log.i(TAG, "[Song] ${identity.title} - ${identity.artist}")
                 }
@@ -235,6 +243,16 @@ class SaltPlayerProvider : LyricProvider {
                     lastCapturedLyric.compareAndSet(captured, null)
                 ) {
                     lyricCache[songKey] = captured.result
+                    fileCache?.write(
+                        songKey,
+                        LyricCacheEntry(
+                            result = captured.result,
+                            songName = identity.title,
+                            artist = identity.artist,
+                            album = identity.album,
+                            songId = identity.id
+                        )
+                    )
                 }
 
                 val result = lyricCache[songKey]
@@ -286,6 +304,7 @@ class SaltPlayerProvider : LyricProvider {
 
     override fun onDestroy() {
         lyricCache.clear()
+        fileCache = null
         lastCapturedLyric.set(null)
         currentSong.set(null)
         hookHandles.clear()

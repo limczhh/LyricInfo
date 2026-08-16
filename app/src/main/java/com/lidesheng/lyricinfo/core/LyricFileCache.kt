@@ -4,18 +4,32 @@ import android.util.Log
 import org.json.JSONObject
 import java.io.File
 
+data class LyricCacheEntry(
+    val result: LyricResult,
+    val songName: String = "",
+    val artist: String = "",
+    val album: String = "",
+    val songId: String = ""
+)
+
 internal class LyricFileCache(private val cacheDir: File) {
 
-    fun read(songKey: String): LyricResult? {
+    fun read(songKey: String): LyricCacheEntry? {
         return try {
             val file = cacheFile(songKey)
             if (!file.exists()) return null
             val json = JSONObject(file.readText())
             val lyric = json.optString("lyric", "").takeIf { it.isNotBlank() } ?: return null
-            LyricResult(
-                lyric = lyric,
-                format = json.optString("format", "lrc"),
-                translation = json.optString("translation", "lrc")
+            LyricCacheEntry(
+                result = LyricResult(
+                    lyric = lyric,
+                    format = json.optString("format", "lrc"),
+                    translation = json.optString("translation", "lrc")
+                ),
+                songName = json.optString("songName", ""),
+                artist = json.optString("artist", ""),
+                album = json.optString("album", ""),
+                songId = json.optString("songId", "")
             )
         } catch (e: Exception) {
             Log.w(TAG, "[FileCache] Read failed: $songKey", e)
@@ -23,13 +37,17 @@ internal class LyricFileCache(private val cacheDir: File) {
         }
     }
 
-    fun write(songKey: String, result: LyricResult) {
+    fun write(songKey: String, entry: LyricCacheEntry) {
         try {
             if (!cacheDir.exists()) cacheDir.mkdirs()
             val json = JSONObject()
-                .put("lyric", result.lyric)
-                .put("format", result.format)
-                .put("translation", result.translation)
+                .put("songName", entry.songName)
+                .put("artist", entry.artist)
+                .put("album", entry.album)
+                .put("songId", entry.songId)
+                .put("lyric", entry.result.lyric)
+                .put("format", entry.result.format)
+                .put("translation", entry.result.translation)
                 .toString()
             cacheFile(songKey).writeText(json)
         } catch (e: Exception) {

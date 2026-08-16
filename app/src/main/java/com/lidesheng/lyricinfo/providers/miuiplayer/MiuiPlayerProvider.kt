@@ -3,12 +3,15 @@ package com.lidesheng.lyricinfo.providers.miuiplayer
 import android.media.MediaMetadata
 import android.os.Bundle
 import android.util.Log
+import com.lidesheng.lyricinfo.core.LyricCacheEntry
+import com.lidesheng.lyricinfo.core.LyricFileCache
 import com.lidesheng.lyricinfo.core.LyricProvider
 import com.lidesheng.lyricinfo.core.LyricResult
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
 import org.json.JSONObject
+import java.io.File
 import java.lang.reflect.Method
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
@@ -47,6 +50,7 @@ class MiuiPlayerProvider : LyricProvider {
     private val lastCapturedLyric = AtomicReference<CapturedLyric?>(null)
     private val lastSourceTrack = AtomicReference<TrackMetadata?>(null)
     private val hookHandles = mutableListOf<XposedInterface.HookHandle>()
+    private var fileCache: LyricFileCache? = null
     private var currentMediaId: String? = null
     private var lastParsedSongKey: String? = null
     private var lastMediaSession: Any? = null
@@ -54,6 +58,7 @@ class MiuiPlayerProvider : LyricProvider {
 
     override fun onAppLoaded(module: XposedModule, param: PackageLoadedParam) {
         Log.i(TAG, "[Hook] ${param.packageName}")
+        fileCache = LyricFileCache(File(param.applicationInfo.dataDir, "cache/lyric_info"))
         val classLoader = param.defaultClassLoader
 
         hookXiaomiMusicEngine(module, classLoader)
@@ -105,6 +110,7 @@ class MiuiPlayerProvider : LyricProvider {
                         }
                         val track = mergeTrackMetadata(lastSourceTrack.get(), lyricTrack)
                         lastSourceTrack.set(track)
+                        loadCachedLyric(track)
 
                         val songKey = track.key
                         
@@ -178,6 +184,7 @@ class MiuiPlayerProvider : LyricProvider {
                     }
                     if (track != null) {
                         lastSourceTrack.set(track)
+                        loadCachedLyric(track)
                     }
 
                     // The second argument is the current notification/status-bar lyric text,
@@ -279,6 +286,29 @@ class MiuiPlayerProvider : LyricProvider {
         return lyricCache.values.firstOrNull { sameTrack(it.metadata, bundleTrack) }
     }
 
+    private fun loadCachedLyric(track: TrackMetadata) {
+        if (track.songId.isBlank() || lyricCache.containsKey(track.key)) return
+        fileCache?.read(track.key)?.let { cached ->
+            lyricCache[track.key] = CapturedLyric(track, cached.result)
+        }
+    }
+
+    private fun storeCachedLyric(captured: CapturedLyric) {
+        lyricCache[captured.metadata.key] = captured
+        if (captured.metadata.songId.isNotBlank()) {
+            fileCache?.write(
+                captured.metadata.key,
+                LyricCacheEntry(
+                    result = captured.result,
+                    songName = captured.metadata.songName,
+                    artist = captured.metadata.artist,
+                    album = captured.metadata.album,
+                    songId = captured.metadata.songId
+                )
+            )
+        }
+    }
+
     private fun buildElrcLyric(lyricObj: Any, lyricClass: Class<*>): String {
         val builder = StringBuilder()
         val sentencesField = lyricClass.getDeclaredField("mSentences").apply { isAccessible = true }
@@ -373,7 +403,7 @@ class MiuiPlayerProvider : LyricProvider {
     private fun injectLyricToBundle(bundle: Bundle, preferredTrack: TrackMetadata? = null) {
         val captured = lastCapturedLyric.getAndSet(null)
         if (captured != null) {
-            lyricCache[captured.metadata.key] = captured
+            storeCachedLyric(captured)
         }
 
         val pendingTrackMatchesBundle = captured != null &&
@@ -411,5 +441,6 @@ class MiuiPlayerProvider : LyricProvider {
         lastSourceTrack.set(null)
         lastMediaSession = null
         lastMediaMetadata = null
+        fileCache = null
     }
 }

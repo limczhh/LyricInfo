@@ -34,6 +34,7 @@ abstract class BaseLyricProvider : LyricProvider {
         Thread(r, "LyricInfo-${javaClass.simpleName}").apply { isDaemon = true }
     }
     protected val lyricCache = ConcurrentHashMap<String, LyricResult>()
+    private val cachedEntries = ConcurrentHashMap<String, LyricCacheEntry>()
     private val fetchingIds = ConcurrentHashMap.newKeySet<String>()
     private var fileCache: LyricFileCache? = null
     private val hookHandles = mutableListOf<XposedInterface.HookHandle>()
@@ -45,6 +46,37 @@ abstract class BaseLyricProvider : LyricProvider {
      */
     protected open val useFileCache: Boolean
         get() = true
+
+    /**
+     * Loads a lyric result and its persisted track identity for a stable key.
+     * The in-memory entry is checked first, then the provider's disk cache.
+     */
+    protected fun loadCachedLyric(cacheKey: String): LyricCacheEntry? {
+        cachedEntries[cacheKey]?.let { return it }
+        lyricCache[cacheKey]?.let { return LyricCacheEntry(it) }
+        if (!useFileCache) return null
+
+        return fileCache?.read(cacheKey)?.also { entry ->
+            cachedEntries[cacheKey] = entry
+            lyricCache[cacheKey] = entry.result
+        }
+    }
+
+    /** Stores a complete lyric result for current and future offline playback. */
+    protected fun storeCachedLyric(track: TrackMetadata, result: LyricResult) {
+        val entry = LyricCacheEntry(
+            result = result,
+            songName = track.songName,
+            artist = track.artist,
+            album = track.album,
+            songId = track.songId
+        )
+        lyricCache[track.cacheKey] = result
+        cachedEntries[track.cacheKey] = entry
+        if (useFileCache) {
+            fileCache?.write(track.cacheKey, entry)
+        }
+    }
 
     override fun onAppLoaded(module: XposedModule, param: PackageLoadedParam) {
         Log.i(TAG, "[Hook] ${param.packageName}")
@@ -166,6 +198,9 @@ abstract class BaseLyricProvider : LyricProvider {
             currentMediaId = songKey
             Log.i(TAG, "[Song] ${track.songName} - ${track.artist}$logSuffix")
         }
+        if (!lyricCache.containsKey(songKey)) {
+            loadCachedLyric(songKey)
+        }
         fetchLyricAsync(track)
     }
 
@@ -219,20 +254,16 @@ abstract class BaseLyricProvider : LyricProvider {
 
         executor.execute {
             try {
-                val cached = if (useFileCache) fileCache?.read(mediaId) else null
+                val cached = loadCachedLyric(mediaId)
                 if (cached != null) {
-                    lyricCache[mediaId] = cached
-                    onLyricAvailable(track, cached)
+                    onLyricAvailable(track, cached.result)
                     Log.d(TAG, "[Fetch] ✓ File cache: ${track.songName}")
                     return@execute
                 }
 
                 val result = fetchLyric(mediaId, track.songName, track.artist)
                 if (result != null && result.lyric.isNotBlank()) {
-                    lyricCache[mediaId] = result
-                    if (useFileCache) {
-                        fileCache?.write(mediaId, result)
-                    }
+                    storeCachedLyric(track, result)
                     onLyricAvailable(track, result)
                     Log.d(TAG, "[Fetch] ✓ API: ${track.songName}")
                 } else {
@@ -251,6 +282,7 @@ abstract class BaseLyricProvider : LyricProvider {
     override fun onDestroy() {
         executor.shutdownNow()
         lyricCache.clear()
+        cachedEntries.clear()
         fetchingIds.clear()
         currentMediaId = null
         hookHandles.clear()

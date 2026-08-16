@@ -21,10 +21,10 @@ import java.util.concurrent.atomic.AtomicBoolean
  * therefore gets identity and display metadata from Kugou's current playback
  * object, then obtains the complete lyric from Kugou's lyric API.
  *
- * If the API cannot provide a lyric, this provider deliberately leaves the
- * bundle untouched. It does not enable or consume Kugou's native LyricInfo
- * path as a fallback; no old internal LyricData, local-file lyric, or fuzzy
- * title/artist search is used as a second source.
+ * If neither the stable-hash disk cache nor Kugou's API can provide a lyric,
+ * this provider deliberately leaves the bundle untouched. It does not enable
+ * or consume Kugou's native LyricInfo path; no old internal LyricData,
+ * private lyric file, or fuzzy title/artist search is used as a source.
  */
 @SuppressLint("SoonBlockedPrivateApi")
 class KugouProvider : BaseLyricProvider() {
@@ -42,9 +42,6 @@ class KugouProvider : BaseLyricProvider() {
 
     override val packageName = PACKAGE_NAME
     override val processNames = listOf(PACKAGE_NAME, "$PACKAGE_NAME:kugou_service")
-
-    // An API failure must not reuse an old lyric from Kugou's private cache.
-    override val useFileCache = false
 
     private data class KugouTrack(
         val identity: String,
@@ -158,7 +155,15 @@ class KugouProvider : BaseLyricProvider() {
         val identity = hash
         val sourceSongName = stringValue(invokeNoArg(trackObject, "getTrackName"))
         val sourceArtist = stringValue(invokeNoArg(trackObject, "getArtistName"))
-        val apiMetadata = apiMetadataCache[identity]
+        val cached = loadCachedLyric(identity)
+        val cachedMetadata = cached?.let {
+            ApiMetadata(
+                songName = it.songName,
+                artist = it.artist,
+                album = it.album
+            )
+        }
+        val apiMetadata = apiMetadataCache[identity] ?: cachedMetadata
 
         val songName = apiMetadata?.songName?.takeIf { it.isNotBlank() } ?: sourceSongName
         val artist = apiMetadata?.artist?.takeIf { it.isNotBlank() } ?: sourceArtist
@@ -218,6 +223,16 @@ class KugouProvider : BaseLyricProvider() {
     }
 
     override fun onLyricAvailable(track: TrackMetadata, result: LyricResult) {
+        apiMetadataCache[track.cacheKey]?.let { metadata ->
+            storeCachedLyric(
+                track.copy(
+                    songName = metadata.songName.takeIf { it.isNotBlank() } ?: track.songName,
+                    artist = metadata.artist.takeIf { it.isNotBlank() } ?: track.artist,
+                    album = metadata.album.takeIf { it.isNotBlank() } ?: track.album
+                ),
+                result
+            )
+        }
         refreshMediaSessions(track.cacheKey)
     }
 

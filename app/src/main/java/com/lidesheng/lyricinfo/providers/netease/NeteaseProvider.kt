@@ -75,6 +75,14 @@ class NeteaseProvider : BaseLyricProvider() {
                 songId = metadata.songId
             )
         }
+        loadCachedLyric(songId)?.let { cached ->
+            return TrackMetadata(
+                songName = cached.songName,
+                artist = cached.artist,
+                album = cached.album,
+                songId = songId
+            )
+        }
         requestSongMetadata(songId)
         return null
     }
