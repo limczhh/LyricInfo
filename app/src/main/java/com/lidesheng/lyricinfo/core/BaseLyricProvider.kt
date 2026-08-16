@@ -38,6 +38,14 @@ abstract class BaseLyricProvider : LyricProvider {
     private var fileCache: LyricFileCache? = null
     private val hookHandles = mutableListOf<XposedInterface.HookHandle>()
 
+    /**
+     * Providers whose source of truth is an online API can disable the generic
+     * disk cache. This keeps an API failure from silently becoming a stale lyric
+     * fallback while retaining the in-memory request de-duplication.
+     */
+    protected open val useFileCache: Boolean
+        get() = true
+
     override fun onAppLoaded(module: XposedModule, param: PackageLoadedParam) {
         Log.i(TAG, "[Hook] ${param.packageName}")
         val cacheDir = File(param.applicationInfo.dataDir, "cache/lyric_info")
@@ -69,7 +77,8 @@ abstract class BaseLyricProvider : LyricProvider {
                 bundleField.isAccessible = true
                 val bundle = bundleField.get(builder) as Bundle
 
-                injectLyricInfo(bundle)
+                val track = injectLyricInfo(bundle)
+                onMediaMetadataBuilt(bundle, track)
 
                 chain.proceed()
             }
@@ -90,10 +99,14 @@ abstract class BaseLyricProvider : LyricProvider {
             val handle = module.hook(setMetaMethod).intercept { chain ->
                 val metadata = chain.getArg(0) as? MediaMetadata
                 if (metadata != null) {
+                    onMediaSessionMetadataObserved(chain.thisObject, metadata)
                     val metaBundleField = metadata.javaClass.getDeclaredField("mBundle")
                     metaBundleField.isAccessible = true
                     val bundle = metaBundleField.get(metadata) as Bundle
-                    injectLyricInfo(bundle, " (setMetadata)")
+                    val track = injectLyricInfo(bundle, " (setMetadata)")
+                    if (track != null) {
+                        onMediaSessionTrackResolved(chain.thisObject, metadata, track)
+                    }
                 }
 
                 chain.proceed()
@@ -109,11 +122,27 @@ abstract class BaseLyricProvider : LyricProvider {
      * Adds LyricInfo to a metadata bundle before the target media session receives it.
      * Providers with a support-library MediaSession can reuse this path as well.
      */
-    protected fun injectLyricInfo(bundle: Bundle, logSuffix: String = "") {
-        val track = resolveTrackMetadata(bundle) ?: return
+    protected fun injectLyricInfo(bundle: Bundle, logSuffix: String = ""): TrackMetadata? {
+        val track = resolveTrackMetadata(bundle) ?: return null
         requestLyric(track, logSuffix)
 
-        val result = lyricCache[track.cacheKey] ?: return
+        val result = lyricCache[track.cacheKey] ?: return track
+        putLyricInfo(bundle, track, result, logSuffix)
+        return track
+    }
+
+    /**
+     * Writes a known result without resolving the current playback object
+     * again. Providers that refresh a retained MediaMetadata asynchronously
+     * must use this overload so an old result cannot be paired with a newer
+     * playback object.
+     */
+    protected fun putLyricInfo(
+        bundle: Bundle,
+        track: TrackMetadata,
+        result: LyricResult,
+        logSuffix: String = ""
+    ) {
         val json = JSONObject()
             .put("songName", track.songName)
             .put("artist", track.artist)
@@ -137,7 +166,7 @@ abstract class BaseLyricProvider : LyricProvider {
             currentMediaId = songKey
             Log.i(TAG, "[Song] ${track.songName} - ${track.artist}$logSuffix")
         }
-        fetchLyricAsync(songKey, track.songName, track.artist)
+        fetchLyricAsync(track)
     }
 
     protected open fun resolveTrackMetadata(bundle: Bundle): TrackMetadata? {
@@ -150,29 +179,67 @@ abstract class BaseLyricProvider : LyricProvider {
         return TrackMetadata(songName, artist, album, mediaId, cacheKey)
     }
 
-    private fun fetchLyricAsync(mediaId: String, title: String?, artist: String?) {
+    /**
+     * Called when a framework MediaSession receives metadata. Providers that
+     * load data asynchronously may retain the session and refresh it after the
+     * lyric result becomes available.
+     */
+    protected open fun onMediaSessionMetadataObserved(session: Any, metadata: MediaMetadata) = Unit
+
+    /**
+     * Called after a framework MediaMetadata.Builder has been inspected. A
+     * provider can use this event to invalidate an older retained refresh
+     * target as soon as a newer track starts being built.
+     */
+    protected open fun onMediaMetadataBuilt(bundle: Bundle, track: TrackMetadata?) = Unit
+
+    /**
+     * Called after the framework metadata has been resolved to a provider
+     * track. This lets a provider associate its retained MediaSession with the
+     * exact stable identity, preventing an old async result from refreshing a
+     * newer song.
+     */
+    protected open fun onMediaSessionTrackResolved(
+        session: Any,
+        metadata: MediaMetadata,
+        track: TrackMetadata
+    ) = Unit
+
+    /**
+     * Called after a lyric has been loaded into the in-memory cache. The
+     * callback also runs for a disk-cache hit, so a provider can use one path
+     * for both synchronous and asynchronous sources.
+     */
+    protected open fun onLyricAvailable(track: TrackMetadata, result: LyricResult) = Unit
+
+    private fun fetchLyricAsync(track: TrackMetadata) {
+        val mediaId = track.cacheKey
         if (lyricCache.containsKey(mediaId)) return
         if (!fetchingIds.add(mediaId)) return
 
         executor.execute {
             try {
-                val cached = fileCache?.read(mediaId)
+                val cached = if (useFileCache) fileCache?.read(mediaId) else null
                 if (cached != null) {
                     lyricCache[mediaId] = cached
-                    Log.d(TAG, "[Fetch] ✓ File cache: $title")
+                    onLyricAvailable(track, cached)
+                    Log.d(TAG, "[Fetch] ✓ File cache: ${track.songName}")
                     return@execute
                 }
 
-                val result = fetchLyric(mediaId, title, artist)
+                val result = fetchLyric(mediaId, track.songName, track.artist)
                 if (result != null && result.lyric.isNotBlank()) {
                     lyricCache[mediaId] = result
-                    fileCache?.write(mediaId, result)
-                    Log.d(TAG, "[Fetch] ✓ API: $title")
+                    if (useFileCache) {
+                        fileCache?.write(mediaId, result)
+                    }
+                    onLyricAvailable(track, result)
+                    Log.d(TAG, "[Fetch] ✓ API: ${track.songName}")
                 } else {
-                    Log.w(TAG, "[Fetch] ✗ No lyric: $title")
+                    Log.w(TAG, "[Fetch] ✗ No lyric: ${track.songName}")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "[Fetch] ✗ $title", e)
+                Log.e(TAG, "[Fetch] ✗ ${track.songName}", e)
             } finally {
                 fetchingIds.remove(mediaId)
             }
