@@ -18,7 +18,7 @@
 
 ## 2. 完整版 (`:app`) 适配情况
 
-完整版通过逆向 API 或本地缓存主动解析并重组注入歌词。
+完整版通过各 Provider 的稳定歌曲 ID/hash、应用内部对象、API 或本地缓存主动解析并重组注入歌词。
 
 ### 已适配
 | 应用 | 包名 | 歌词格式 | 获取方式 |
@@ -26,7 +26,7 @@
 | 网易云音乐 | `com.netease.cloudmusic` | YRC → elrc | EApi 加密接口 |
 | 荣耀定制版网易云 | `com.hihonor.cloudmusic` | YRC → elrc | 同上 |
 | QQ 音乐 | `com.tencent.qqmusic` | QRC → elrc | 3DES 加密接口 |
-| 酷狗音乐 | `com.kugou.android` | 原生获取 | 独立 Hook `SystemUtils` 绕过校验 |
+| 酷狗音乐 | `com.kugou.android` | KRC/LRC → elrc/lrc | 请求酷狗歌词接口并解析 |
 | 小米音乐 | `com.miui.player` | 内部解析 → elrc/lrc | Hook 内部歌词引擎 (MusicEngine) |
 | 汽水音乐 | `com.luna.music` | KRC → elrc | Hook `Track`/`TrackLyric`，本地 KRC 缓存兜底 |
 | 椒盐音乐 | `com.salt.music` | 自动检测 → elrc/lrc | DexKit hook 内部歌词类 |
