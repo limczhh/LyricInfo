@@ -156,25 +156,17 @@ class KugouProvider : BaseLyricProvider() {
         }
 
         val identity = hash
-        val sourceSongName = firstNonBlank(
-            stringValue(invokeNoArg(trackObject, "getTrackName")),
-            bundle.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty()
-        )
-        val sourceArtist = firstNonBlank(
-            stringValue(invokeNoArg(trackObject, "getArtistName")),
-            bundle.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty()
-        )
-        val sourceAlbum = bundle.getString(MediaMetadata.METADATA_KEY_ALBUM).orEmpty()
-
-        if (sourceSongName.isBlank() || sourceArtist.isBlank()) {
-            Log.w(TAG, "[Kugou] Current playback object has incomplete display metadata; identity=$identity")
-        }
-
+        val sourceSongName = stringValue(invokeNoArg(trackObject, "getTrackName"))
+        val sourceArtist = stringValue(invokeNoArg(trackObject, "getArtistName"))
         val apiMetadata = apiMetadataCache[identity]
 
         val songName = apiMetadata?.songName?.takeIf { it.isNotBlank() } ?: sourceSongName
         val artist = apiMetadata?.artist?.takeIf { it.isNotBlank() } ?: sourceArtist
-        val album = apiMetadata?.album?.takeIf { it.isNotBlank() } ?: sourceAlbum
+        val album = apiMetadata?.album?.takeIf { it.isNotBlank() }.orEmpty()
+
+        if (songName.isBlank() || artist.isBlank()) {
+            Log.w(TAG, "[Kugou] Current playback object has incomplete display metadata; identity=$identity")
+        }
         val track = KugouTrack(
             identity = identity,
             hash = hash,
@@ -511,10 +503,6 @@ class KugouProvider : BaseLyricProvider() {
 
     private fun stringValue(value: Any?): String {
         return value?.toString()?.trim().orEmpty()
-    }
-
-    private fun firstNonBlank(vararg values: String): String {
-        return values.firstOrNull { it.isNotBlank() }.orEmpty()
     }
 
     private fun looksLikeHash(value: String): Boolean {
