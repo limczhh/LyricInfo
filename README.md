@@ -97,8 +97,8 @@ LyricInfo/
 
 ---
 
-## 参考项目
 
+- [ColorOS-Live-Lyrics-Bridge](https://github.com/Andrea-lyz/ColorOS-Live-Lyrics-Bridge)
 - [saltplayer_color_ex](https://github.com/CCCC-L/saltplayer_color_ex)
 - [LyricProvider](https://github.com/tomakino/LyricProvider)
 - [SuperLyric](https://github.com/HChenX/SuperLyric)
