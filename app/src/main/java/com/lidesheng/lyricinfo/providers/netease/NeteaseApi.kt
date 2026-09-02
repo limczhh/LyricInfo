@@ -106,15 +106,9 @@ internal object NeteaseApi {
                 else -> return null
             } ?: return null
 
-            // Normalize and merge translation (tlyric is usually standard LRC)
+            // Keep translation as an independent lane. It may itself be enhanced LRC.
             val transNormalized = translation?.let { LyricNormalizer.normalize(it) }
-            val merged = if (transNormalized != null) {
-                LyricNormalizer.merge(normalized.lyric, transNormalized.lyric)
-            } else {
-                normalized.lyric
-            }
-
-            LyricResult(lyric = merged)
+            normalized.copy(translation = transNormalized?.preferredLane())
         } catch (e: Exception) {
             Log.e(TAG, "[Netease] API error: ${e.message}")
             null
