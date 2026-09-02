@@ -57,9 +57,18 @@ object LyricNormalizer {
         val lineLyric = ELRC_TAG_PATTERN.replace(enhanced, "").trim()
         if (lineLyric.isBlank()) return null
 
+        val hasTimedText = enhanced.lineSequence().any { line ->
+            val tags = ELRC_TAG_PATTERN.findAll(line).toList()
+            tags.indices.any { index ->
+                val textStart = tags[index].range.last + 1
+                val textEnd = tags.getOrNull(index + 1)?.range?.first ?: line.length
+                line.substring(textStart, textEnd).isNotBlank()
+            }
+        }
+
         return LyricResult(
             lyric = lineLyric,
-            rawLyric = enhanced.takeIf { ELRC_TAG_PATTERN.containsMatchIn(it) }
+            rawLyric = enhanced.takeIf { hasTimedText }
         )
     }
 
@@ -263,98 +272,6 @@ object LyricNormalizer {
         }
 
         return outputLines.takeIf { it.isNotEmpty() }?.joinToString("\n")
-    }
-
-    /**
-     * Merge normalized original and translation lyrics by timestamp.
-     *
-     * For each timestamp present in the original, if the translation has lines with the same
-     * timestamp, those translation lines are appended immediately after the original lines.
-     * Format tags (elrc `<mm:ss.xx>` or lrc) in each line are preserved as-is.
-     *
-     * @param original  Normalized lyric string (elrc or lrc)
-     * @param translation Normalized translation lyric string (elrc or lrc)
-     * @return Merged lyric string
-     */
-    fun merge(original: String, translation: String): String {
-        val transByTime = parseLinesByTimestampMs(translation)
-        if (transByTime.isEmpty()) {
-            Log.d("LyricNormalizer", "merge: 翻译为空，跳过合并")
-            return original
-        }
-        val transTimes = transByTime.keys.sorted()
-
-        val origCount = original.lines().count { it.isNotBlank() }
-        val transCount = transTimes.size
-        var matched = 0
-
-        val output = StringBuilder()
-        for (line in original.lines()) {
-            output.appendLine(line)
-            val tsMs = extractLineTimestampMs(line)
-            if (tsMs < 0) continue
-            // 模糊匹配：找时间差在 1000ms 内的翻译
-            val closest = transTimes.minByOrNull { kotlin.math.abs(it - tsMs) }
-            if (closest != null && kotlin.math.abs(closest - tsMs) <= 1000) {
-                val transLines = transByTime[closest]
-                if (transLines != null) {
-                    matched++
-                    for (tLine in transLines) {
-                        // 替换翻译行的时间戳为原文的时间戳，确保接收端能匹配
-                        val replaced = replaceTimestamp(tLine, tsMs)
-                        output.appendLine(replaced)
-                    }
-                }
-            }
-        }
-
-        Log.d("LyricNormalizer", "merge: 原文${origCount}行, 翻译${transCount}个时间戳, 匹配${matched}行")
-        return output.toString().trimEnd()
-    }
-
-    /**
-     * Parse translation lines into a map of timestamp(ms) -> list of lines.
-     */
-    private fun parseLinesByTimestampMs(content: String): Map<Long, MutableList<String>> {
-        val result = mutableMapOf<Long, MutableList<String>>()
-        for (line in content.lines()) {
-            val ts = extractLineTimestampMs(line)
-            if (ts >= 0) {
-                result.getOrPut(ts) { mutableListOf() }.add(line)
-            }
-        }
-        return result
-    }
-
-    /**
-     * Extract line-level timestamp as milliseconds (Long).
-     */
-    private fun extractLineTimestampMs(line: String): Long {
-        val match = LRC_TIME_TAG.find(line) ?: return -1
-        val tag = match.value
-        val inner = tag.substring(1, tag.length - 1)
-        val parts = inner.split(":")
-        if (parts.size != 2) return -1
-        val min = parts[0].toLongOrNull() ?: return -1
-        val secParts = parts[1].split(".")
-        if (secParts.size != 2) return -1
-        val sec = secParts[0].toLongOrNull() ?: return -1
-        val ms = when (secParts[1].length) {
-            2 -> (secParts[1].toLongOrNull() ?: 0) * 10
-            3 -> secParts[1].toLongOrNull() ?: 0
-            else -> 0
-        }
-        return min * 60000 + sec * 1000 + ms
-    }
-
-    /**
-     * Replace the line-level timestamp in a lyric line with a new value (ms).
-     * [00:10.440]翻译 → [00:10.790]翻译 (when newMs = 10790)
-     */
-    private fun replaceTimestamp(line: String, newMs: Long): String {
-        val match = LRC_TIME_TAG.find(line) ?: return line
-        val newTag = formatLrcTime(newMs)
-        return line.substring(0, match.range.first) + newTag + line.substring(match.range.last + 1)
     }
 
     /** Line-level: [mm:ss.xxx] */
