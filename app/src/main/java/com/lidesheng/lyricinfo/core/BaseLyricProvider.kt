@@ -7,7 +7,6 @@ import android.util.Log
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
-import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -174,18 +173,21 @@ abstract class BaseLyricProvider : LyricProvider {
         track: TrackMetadata,
         result: LyricResult,
         logSuffix: String = ""
-    ) {
-        val json = JSONObject()
-            .put("songName", track.songName)
-            .put("artist", track.artist)
-            .put("album", track.album)
-            .put("songId", track.songId)
-            .put("lyric", result.lyric)
-            .put("format", result.format)
-            .put("translation", result.translation)
-            .toString()
+    ): Boolean {
+        val json = LyricInfoSerializer.encode(
+            songName = track.songName,
+            artist = track.artist,
+            songId = track.songId,
+            album = track.album,
+            result = result
+        ) ?: run {
+            bundle.remove(LYRIC_INFO_KEY)
+            Log.w(TAG, "[Inject] skipped invalid lyric result$logSuffix")
+            return false
+        }
         bundle.putString(LYRIC_INFO_KEY, json)
         Log.d(TAG, "[Inject] ✓ ${track.songName}$logSuffix")
+        return true
     }
 
     /**

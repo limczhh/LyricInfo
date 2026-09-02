@@ -1,14 +1,12 @@
 package com.lidesheng.lyricinfo.core
 
-/**
- * Structured lyric data for JSON injection.
- *
- * @param lyric All lyrics (original + translation interleaved by timestamp)
- * @param format Format of lyrics: "lrc", "elrc", or "ttml"
- * @param translation Format indicator for translation lines: "lrc" or "elrc"
- */
+/** Structured lyric data for JSON injection. */
 data class LyricResult(
     val lyric: String,
-    val format: String = "lrc",
-    val translation: String = "lrc"
-)
+    val rawLyric: String? = null,
+    val translation: String? = null,
+    val roma: String? = null
+) {
+    /** Prefer the enhanced representation when a consumer needs one lyric lane. */
+    fun preferredLane(): String = rawLyric?.takeIf { it.isNotBlank() } ?: lyric
+}

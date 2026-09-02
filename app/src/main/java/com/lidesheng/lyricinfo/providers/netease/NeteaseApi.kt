@@ -114,7 +114,7 @@ internal object NeteaseApi {
                 normalized.lyric
             }
 
-            LyricResult(lyric = merged, format = normalized.format, translation = transNormalized?.format ?: "")
+            LyricResult(lyric = merged)
         } catch (e: Exception) {
             Log.e(TAG, "[Netease] API error: ${e.message}")
             null

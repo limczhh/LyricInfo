@@ -149,8 +149,6 @@ internal object KugouApi {
             ) ?: return null
             if (merged.isBlank()) return null
 
-            val hasWordTiming = originalType == "krc" && WORD_TAG.containsMatchIn(content)
-            val hasTranslation = !translationPayload.isNullOrBlank()
             Result(
                 songName = canonical.songName.ifBlank {
                     firstString(candidate, "songname", "songName", "song", "title")
@@ -159,21 +157,7 @@ internal object KugouApi {
                     firstString(candidate, "singer", "singername", "artist")
                 },
                 album = canonical.album,
-                lyric = LyricResult(
-                    lyric = merged,
-                    format = if (hasWordTiming) "elrc" else "lrc",
-                    translation = if (hasTranslation) {
-                        if (translationType == "krc" &&
-                            WORD_TAG.containsMatchIn(translationPayload)
-                        ) {
-                            "elrc"
-                        } else {
-                            "lrc"
-                        }
-                    } else {
-                        ""
-                    }
-                )
+                lyric = LyricResult(lyric = merged)
             )
         } catch (e: Exception) {
             Log.e(TAG, "[Kugou] API error", e)

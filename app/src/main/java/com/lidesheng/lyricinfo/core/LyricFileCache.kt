@@ -19,15 +19,20 @@ internal class LyricFileCache(private val cacheDir: File) {
             val file = cacheFile(songKey)
             if (!file.exists()) return null
             val json = JSONObject(file.readText())
+            if (json.optInt(CACHE_VERSION_KEY, -1) != CACHE_VERSION) return null
+
             val lyric = json.optString("lyric", "").takeIf { it.isNotBlank() } ?: return null
+            val songName = json.optString("songName", "").trim().takeIf { it.isNotBlank() } ?: return null
+            val artist = json.optString("artist", "").trim().takeIf { it.isNotBlank() } ?: return null
             LyricCacheEntry(
                 result = LyricResult(
                     lyric = lyric,
-                    format = json.optString("format", "lrc"),
-                    translation = json.optString("translation", "lrc")
+                    rawLyric = json.optString("rawLyric", "").takeIf { it.isNotBlank() },
+                    translation = json.optString("translation", "").takeIf { it.isNotBlank() },
+                    roma = json.optString("roma", "").takeIf { it.isNotBlank() }
                 ),
-                songName = json.optString("songName", ""),
-                artist = json.optString("artist", ""),
+                songName = songName,
+                artist = artist,
                 album = json.optString("album", ""),
                 songId = json.optString("songId", "")
             )
@@ -41,13 +46,17 @@ internal class LyricFileCache(private val cacheDir: File) {
         try {
             if (!cacheDir.exists()) cacheDir.mkdirs()
             val json = JSONObject()
+                .put(CACHE_VERSION_KEY, CACHE_VERSION)
                 .put("songName", entry.songName)
                 .put("artist", entry.artist)
-                .put("album", entry.album)
-                .put("songId", entry.songId)
                 .put("lyric", entry.result.lyric)
-                .put("format", entry.result.format)
-                .put("translation", entry.result.translation)
+                .apply {
+                    putOptional("songId", entry.songId)
+                    putOptional("album", entry.album)
+                    putOptional("rawLyric", entry.result.rawLyric)
+                    putOptional("translation", entry.result.translation)
+                    putOptional("roma", entry.result.roma)
+                }
                 .toString()
             cacheFile(songKey).writeText(json)
         } catch (e: Exception) {
@@ -59,7 +68,13 @@ internal class LyricFileCache(private val cacheDir: File) {
         return File(cacheDir, "${songKey.hashCode().toString(16)}.json")
     }
 
+    private fun JSONObject.putOptional(key: String, value: String?) {
+        value?.trim()?.takeIf { it.isNotBlank() }?.let { put(key, it) }
+    }
+
     companion object {
         private const val TAG = "LyricInfo"
+        private const val CACHE_VERSION_KEY = "cacheVersion"
+        private const val CACHE_VERSION = 2
     }
 }

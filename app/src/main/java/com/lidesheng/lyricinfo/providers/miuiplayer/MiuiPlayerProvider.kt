@@ -5,12 +5,13 @@ import android.os.Bundle
 import android.util.Log
 import com.lidesheng.lyricinfo.core.LyricCacheEntry
 import com.lidesheng.lyricinfo.core.LyricFileCache
+import com.lidesheng.lyricinfo.core.LyricInfoSerializer
+import com.lidesheng.lyricinfo.core.LyricNormalizer
 import com.lidesheng.lyricinfo.core.LyricProvider
 import com.lidesheng.lyricinfo.core.LyricResult
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
-import org.json.JSONObject
 import java.io.File
 import java.lang.reflect.Method
 import java.util.concurrent.ConcurrentHashMap
@@ -118,9 +119,12 @@ class MiuiPlayerProvider : LyricProvider {
                         if (songKey != lastParsedSongKey) {
                             lastParsedSongKey = songKey
                             val elrcLyric = buildElrcLyric(lyricObj, lyricClass)
-                            if (elrcLyric.isNotEmpty()) {
+                            val normalized = elrcLyric
+                                .takeIf { it.isNotBlank() }
+                                ?.let { LyricNormalizer.normalize(it) }
+                            if (normalized != null) {
                                 lastCapturedLyric.set(
-                                    CapturedLyric(track, LyricResult(elrcLyric, "elrc", ""))
+                                    CapturedLyric(track, normalized)
                                 )
                                 Log.d(TAG, "[MiPlayer] ✓ Parsed full ELRC lyrics for: ${track.songName}")
                                 
@@ -419,15 +423,13 @@ class MiuiPlayerProvider : LyricProvider {
                 currentMediaId = track.key
                 Log.i(TAG, "[Song] ${track.songName} - ${track.artist}")
             }
-            val json = JSONObject()
-                .put("songName", track.songName)
-                .put("artist", track.artist)
-                .put("album", track.album)
-                .put("songId", track.songId)
-                .put("lyric", payload.result.lyric)
-                .put("format", payload.result.format)
-                .put("translation", payload.result.translation)
-                .toString()
+            val json = LyricInfoSerializer.encode(
+                songName = track.songName,
+                artist = track.artist,
+                songId = track.songId,
+                album = track.album,
+                result = payload.result
+            ) ?: return
             bundle.putString(LYRIC_INFO_KEY, json)
         }
     }

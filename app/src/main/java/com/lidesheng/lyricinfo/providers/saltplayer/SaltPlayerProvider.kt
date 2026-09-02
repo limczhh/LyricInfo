@@ -9,13 +9,13 @@ import android.os.SystemClock
 import android.util.Log
 import com.lidesheng.lyricinfo.core.LyricCacheEntry
 import com.lidesheng.lyricinfo.core.LyricFileCache
+import com.lidesheng.lyricinfo.core.LyricInfoSerializer
 import com.lidesheng.lyricinfo.core.LyricNormalizer
 import com.lidesheng.lyricinfo.core.LyricProvider
 import com.lidesheng.lyricinfo.core.LyricResult
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
-import org.json.JSONObject
 import org.luckypray.dexkit.DexKitBridge
 import org.luckypray.dexkit.query.FindClass
 import org.luckypray.dexkit.query.enums.MatchType
@@ -156,11 +156,10 @@ class SaltPlayerProvider : LyricProvider {
             val rawLrc = chain.getArg(0) as? String ?: return@intercept chain.proceed()
             val normalized = LyricNormalizer.normalize(rawLrc)
             if (normalized != null) {
-                val transFormat = detectTranslationFormat(normalized.lyric)
                 lastCapturedLyric.set(
                     CapturedLyric(
                         currentSong.get()?.id,
-                        LyricResult(normalized.lyric, normalized.format, transFormat),
+                        LyricResult(lyric = normalized.lyric),
                         SystemClock.uptimeMillis()
                     )
                 )
@@ -302,7 +301,7 @@ class SaltPlayerProvider : LyricProvider {
         lastCapturedLyric.set(
             CapturedLyric(
                 songId = songId,
-                result = normalized.copy(translation = detectTranslationFormat(normalized.lyric)),
+                result = LyricResult(lyric = normalized.lyric),
                 capturedAt = capturedAt
             )
         )
@@ -399,11 +398,10 @@ class SaltPlayerProvider : LyricProvider {
             val rawLrc = chain.getArg(1) as? String ?: return@intercept chain.proceed()
             val normalized = LyricNormalizer.normalize(rawLrc)
             if (normalized != null) {
-                val transFormat = detectTranslationFormat(normalized.lyric)
                 lastCapturedLyric.set(
                     CapturedLyric(
                         currentSong.get()?.id,
-                        LyricResult(normalized.lyric, normalized.format, transFormat),
+                        LyricResult(lyric = normalized.lyric),
                         SystemClock.uptimeMillis()
                     )
                 )
@@ -637,15 +635,13 @@ class SaltPlayerProvider : LyricProvider {
             return false
         }
 
-        val json = JSONObject()
-            .put("songName", identity.title)
-            .put("artist", identity.artist)
-            .put("album", identity.album)
-            .put("songId", identity.id)
-            .put("lyric", result.lyric)
-            .put("format", result.format)
-            .put("translation", result.translation)
-            .toString()
+        val json = LyricInfoSerializer.encode(
+            songName = identity.title,
+            artist = identity.artist,
+            songId = identity.id,
+            album = identity.album,
+            result = result
+        ) ?: return false
         bundle.putString(LYRIC_INFO_KEY, json)
         Log.d(TAG, "[Inject] ✓ ${identity.title}")
         return true

@@ -8,10 +8,10 @@ import android.util.LruCache
 import com.lidesheng.lyricinfo.core.LyricNormalizer
 import com.lidesheng.lyricinfo.core.LyricProvider
 import com.lidesheng.lyricinfo.core.LyricResult
+import com.lidesheng.lyricinfo.core.LyricInfoSerializer
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
-import org.json.JSONObject
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.util.concurrent.atomic.AtomicReference
@@ -115,11 +115,7 @@ open class LxMusicProvider(
         }
 
         lastCapturedLyric.set(
-            LyricResult(
-                lyric = merged,
-                format = normalized.format,
-                translation = transNormalized?.format ?: ""
-            )
+            LyricResult(lyric = merged)
         )
         refreshMediaSession()
     }
@@ -191,15 +187,13 @@ open class LxMusicProvider(
         }
 
         val result = lyricCache.get(key) ?: return
-        val json = JSONObject()
-            .put("songName", "")
-            .put("artist", "")
-            .put("album", "")
-            .put("songId", "")
-            .put("lyric", result.lyric)
-            .put("format", result.format)
-            .put("translation", result.translation)
-            .toString()
+        val json = LyricInfoSerializer.encode(
+            songName = bundle.getString(MediaMetadata.METADATA_KEY_TITLE),
+            artist = bundle.getString(MediaMetadata.METADATA_KEY_ARTIST),
+            songId = bundle.getCharSequence(MediaMetadata.METADATA_KEY_MEDIA_ID)?.toString(),
+            album = bundle.getString(MediaMetadata.METADATA_KEY_ALBUM),
+            result = result
+        ) ?: return
         bundle.putString(LYRIC_INFO_KEY, json)
     }
 

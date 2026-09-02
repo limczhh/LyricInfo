@@ -3,7 +3,8 @@ package com.lidesheng.lyricinfo.core
 import android.util.Log
 
 /**
- * Normalizes lyrics from various private formats to standard elrc/lrc.
+ * Normalizes lyrics from various private formats to a standard line LRC lane
+ * and, when available, a trusted enhanced original lane.
  *
  * Supported input formats:
  * - Word-level LRC: [mm:ss.xxx]word[mm:ss.xxx]word... (inline timestamps)
@@ -31,25 +32,35 @@ object LyricNormalizer {
         // but YRC word-tags (offset,dur,flags) also match QRC's (offset,dur) pattern.
         if (isYrc(trimmed)) {
             val elrc = yrcToElrc(trimmed) ?: return null
-            return LyricResult(lyric = elrc, format = "elrc")
+            return fromEnhanced(elrc)
         }
 
         if (isQrc(trimmed)) {
             val elrc = qrcToElrc(trimmed) ?: return null
-            return LyricResult(lyric = elrc, format = "elrc")
+            return fromEnhanced(elrc)
         }
 
         // Word-level LRC: [mm:ss.xxx]word[mm:ss.xxx]word...
         if (isWordLrc(trimmed)) {
             val elrc = wordLrcToElrc(trimmed) ?: return null
-            return LyricResult(lyric = elrc, format = "elrc")
+            return fromEnhanced(elrc)
         }
 
         if (isElrc(trimmed)) {
-            return LyricResult(lyric = trimmed, format = "elrc")
+            return fromEnhanced(trimmed)
         }
 
-        return LyricResult(lyric = trimmed, format = "lrc")
+        return LyricResult(lyric = trimmed)
+    }
+
+    private fun fromEnhanced(enhanced: String): LyricResult? {
+        val lineLyric = ELRC_TAG_PATTERN.replace(enhanced, "").trim()
+        if (lineLyric.isBlank()) return null
+
+        return LyricResult(
+            lyric = lineLyric,
+            rawLyric = enhanced.takeIf { ELRC_TAG_PATTERN.containsMatchIn(it) }
+        )
     }
 
     private fun isYrc(content: String): Boolean {

@@ -116,9 +116,7 @@ internal object QQMusicApi {
             }
 
             LyricResult(
-                lyric = merged,
-                format = normalized.format,
-                translation = transNormalized?.format ?: ""
+                lyric = merged
             )
         } catch (e: Exception) {
             Log.e(TAG, "[QQMusic] API error: ${e.message}")

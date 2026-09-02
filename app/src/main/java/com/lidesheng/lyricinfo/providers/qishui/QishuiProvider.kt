@@ -137,9 +137,7 @@ class QishuiProvider : BaseLyricProvider() {
 
             // Translation lines are always merged as plain LRC (no word-level tags)
             LyricResult(
-                lyric = merged,
-                format = "elrc",
-                translation = if (hasTranslation) "lrc" else ""
+                lyric = merged
             )
         } catch (e: Exception) {
             Log.e(TAG, "[Qishui] Failed to parse cache: mediaId=$mediaId", e)
@@ -403,9 +401,7 @@ class QishuiProvider : BaseLyricProvider() {
         if (merged.isBlank()) return null
 
         return LyricResult(
-            lyric = merged,
-            format = "elrc",
-            translation = if (translation != null) "lrc" else ""
+            lyric = merged
         )
     }
 
