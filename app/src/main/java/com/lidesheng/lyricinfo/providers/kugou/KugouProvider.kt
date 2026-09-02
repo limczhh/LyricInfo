@@ -332,8 +332,7 @@ class KugouProvider : BaseLyricProvider() {
             songId = identity,
             cacheKey = identity
         )
-        putLyricInfo(bundle, metadata, result, logSuffix)
-        return true
+        return putLyricInfo(bundle, metadata, result, logSuffix)
     }
 
     private fun matchesRefreshTarget(

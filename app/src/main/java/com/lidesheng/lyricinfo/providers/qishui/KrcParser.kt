@@ -1,6 +1,5 @@
 package com.lidesheng.lyricinfo.providers.qishui
 
-import android.util.Log
 import com.lidesheng.lyricinfo.core.LyricNormalizer
 import com.lidesheng.lyricinfo.core.LyricResult
 
@@ -16,8 +15,6 @@ import com.lidesheng.lyricinfo.core.LyricResult
  * Output: independent line-level and optional enhanced original lanes.
  */
 object KrcParser {
-
-    private const val TAG = "KrcParser"
 
     // Line header: [startMs,durationMs]
     private val LINE_HEADER = Regex("""\[(\d+),(\d+)]""")
@@ -61,6 +58,10 @@ object KrcParser {
     }
 
     private fun parseLrcResult(content: String): LyricResult? {
+        LyricNormalizer.normalize(content)
+            ?.takeIf { it.rawLyric != null }
+            ?.let { return it }
+
         val lines = parseLrcToLines(content)
         if (lines.isEmpty()) return null
         val lyric = lines.joinToString("\n") { line ->
@@ -82,74 +83,6 @@ object KrcParser {
         }.trim()
     }
 
-    /**
-     * Parse lyrics and merge with translation, returning elrc format.
-     * Supports both KRC and LRC types for original and translation.
-     *
-     * @param type Original lyric type ("krc" or "lrc")
-     * @param content Raw lyric content
-     * @param transType Translation lyric type ("krc" or "lrc", optional)
-     * @param transContent Raw translation content (optional)
-     * @return Merged elrc string, or null if parsing fails
-     */
-    fun parseAndMerge(type: String?, content: String?, transType: String?, transContent: String?): String? {
-        if (content.isNullOrBlank()) return null
-
-        val original = when (type?.lowercase()) {
-            "krc" -> parseKrcToElrc(content)
-            "lrc" -> parseLrcToElrc(content)
-            else -> return null
-        } ?: return null
-
-        if (transContent.isNullOrBlank()) return original
-
-        val transLines = when (transType?.lowercase()) {
-            "krc" -> parseKrcToLines(transContent)
-            "lrc" -> parseLrcToLines(transContent)
-            else -> emptyList()
-        }
-        if (transLines.isEmpty()) return original
-
-        return merge(original, transLines)
-    }
-
-    /**
-     * Parse KRC content to elrc format string.
-     */
-    fun parseKrcToElrc(content: String?): String? {
-        val lines = parseKrcToLines(content)
-        if (lines.isEmpty()) return null
-
-        val output = StringBuilder()
-        for (line in lines) {
-            output.append(formatLrcTime(line.startMs))
-            for (word in line.words) {
-                if (word.text.isNotEmpty()) {
-                    output.append(formatElrcTime(word.beginMs))
-                        .append(word.text)
-                }
-            }
-            output.append('\n')
-        }
-        return output.toString().trimEnd()
-    }
-
-    /**
-     * Parse LRC content to elrc format string (no word-level tags).
-     */
-    private fun parseLrcToElrc(content: String?): String? {
-        val lines = parseLrcToLines(content)
-        if (lines.isEmpty()) return null
-
-        val output = StringBuilder()
-        for (line in lines) {
-            output.append(formatLrcTime(line.startMs))
-                .append(line.text)
-                .append('\n')
-        }
-        return output.toString().trimEnd()
-    }
-
     private fun parseKrcToLines(content: String?): List<ParsedLine> {
         if (content.isNullOrBlank()) return emptyList()
         val result = mutableListOf<ParsedLine>()
@@ -159,7 +92,6 @@ object KrcParser {
 
             val headerMatch = LINE_HEADER.find(rawLine) ?: continue
             val startMs = headerMatch.groupValues[1].toLong()
-            val durationMs = headerMatch.groupValues[2].toLong()
             val body = rawLine.substring(headerMatch.range.last + 1)
 
             val words = mutableListOf<Word>()
@@ -190,7 +122,7 @@ object KrcParser {
                         val offsetMs = tagMatch.groupValues[1].toLong()
                         val wordDurMs = tagMatch.groupValues[2].toLong()
                         val wordBeginMs = startMs + offsetMs
-                        words.add(Word(wordBeginMs, wordDurMs, wordText, timed = true))
+                        words.add(Word(wordBeginMs, wordText, timed = true))
                         prevEndMs = wordBeginMs + wordDurMs
                         pos = tagMatch.range.last + 1
                         continue
@@ -199,11 +131,11 @@ object KrcParser {
 
                 // No tag follows — untagged word
                 val inferredBegin = prevEndMs ?: startMs
-                words.add(Word(inferredBegin, 0L, wordText, timed = false))
+                words.add(Word(inferredBegin, wordText, timed = false))
             }
 
             val text = body.replace(WORD_TAG, "")
-            result.add(ParsedLine(startMs, durationMs, text, words))
+            result.add(ParsedLine(startMs, text, words))
         }
 
         return result
@@ -217,64 +149,30 @@ object KrcParser {
             if (rawLine.isBlank()) continue
 
             val timeMatch = LRC_TIME_TAG.find(rawLine) ?: continue
-            val startMs = extractLineTimestampMs(timeMatch.value)
+            val startMs = parseTimestampMs(timeMatch.value)
             if (startMs < 0) continue
             val text = rawLine.substring(timeMatch.range.last + 1)
 
-            result.add(ParsedLine(startMs, 0L, text, emptyList()))
+            result.add(ParsedLine(startMs, text, emptyList()))
         }
 
         return result
     }
 
-    /**
-     * Merge original elrc lyrics with translation lines.
-     * Translation lines are inserted after their matching original line (within 50ms).
-     * Duplicate translations (same text as original) are skipped.
-     */
-    private fun merge(original: String, transLines: List<ParsedLine>): String {
-        val transTimes = transLines.map { it.startMs }.sorted()
-        var matched = 0
-        val output = StringBuilder()
-
-        for (line in original.lines()) {
-            output.appendLine(line)
-            val tsMs = extractLineTimestampMs(line)
-            if (tsMs < 0) continue
-
-            val closest = transTimes.minByOrNull { kotlin.math.abs(it - tsMs) }
-            if (closest == null || kotlin.math.abs(closest - tsMs) > 50) continue
-
-            val transLine = transLines.firstOrNull { it.startMs == closest } ?: continue
-            // Strip word-level tags before comparing to detect duplicate translations
-            val originalText = line.substringAfter("]").replace(WORD_TAG, "")
-            if (transLine.text == originalText) continue
-
-            matched++
-            output.appendLine("${formatLrcTime(tsMs)}${transLine.text}")
-        }
-
-        Log.d(TAG, "merge: original ${original.lines().count { it.isNotBlank() }} lines, " +
-            "translation ${transLines.size} lines, matched $matched")
-        return output.toString().trimEnd()
-    }
-
-    private fun extractLineTimestampMs(line: String): Long {
-        val match = LRC_TIME_TAG.find(line) ?: return -1
-        val tag = match.value
+    private fun parseTimestampMs(tag: String): Long {
         val inner = tag.substring(1, tag.length - 1)
         val parts = inner.split(":")
         if (parts.size != 2) return -1
-        val min = parts[0].toLongOrNull() ?: return -1
-        val secParts = parts[1].split(".")
-        if (secParts.size != 2) return -1
-        val sec = secParts[0].toLongOrNull() ?: return -1
-        val ms = when (secParts[1].length) {
-            2 -> (secParts[1].toLongOrNull() ?: 0) * 10
-            3 -> secParts[1].toLongOrNull() ?: 0
-            else -> 0
+        val minutes = parts[0].toLongOrNull() ?: return -1
+        val seconds = parts[1].split(".")
+        if (seconds.size != 2) return -1
+        val second = seconds[0].toLongOrNull() ?: return -1
+        val millis = when (seconds[1].length) {
+            2 -> (seconds[1].toLongOrNull() ?: return -1) * 10
+            3 -> seconds[1].toLongOrNull() ?: return -1
+            else -> return -1
         }
-        return min * 60000 + sec * 1000 + ms
+        return minutes * 60000 + second * 1000 + millis
     }
 
     /** Line-level time: [mm:ss.xxx] */
@@ -297,14 +195,12 @@ object KrcParser {
 
     private data class ParsedLine(
         val startMs: Long,
-        val durationMs: Long,
         val text: String,
         val words: List<Word>
     )
 
     private data class Word(
         val beginMs: Long,
-        val durationMs: Long,
         val text: String,
         val timed: Boolean
     )

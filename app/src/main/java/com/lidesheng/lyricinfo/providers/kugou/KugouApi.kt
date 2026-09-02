@@ -56,7 +56,6 @@ internal object KugouApi {
     private val KRC_LINE = Regex("""\[\d+,\d+]""")
     private val KRC_LINE_HEADER = Regex("""\[(\d+),(\d+)]""")
     private val LRC_LINE = Regex("""\[\d{1,3}:\d{2}(?:\.\d{1,3})?]""")
-    private val WORD_TAG = Regex("""<\d+,\d+,\d+>""")
     private const val LANGUAGE_HEADER_PREFIX = "[language:"
 
     data class TrackRequest(
@@ -141,13 +140,12 @@ internal object KugouApi {
             val translationPayload = embeddedTranslation?.content
             val translationType = embeddedTranslation?.type.orEmpty()
 
-            val merged = KrcParser.parseAndMerge(
-                originalType,
-                content,
-                translationType,
-                translationPayload
-            ) ?: return null
-            if (merged.isBlank()) return null
+            val original = KrcParser.parse(originalType, content) ?: return null
+            val translation = translationPayload?.let {
+                KrcParser.parse(translationType, it)
+            }
+            val result = original.copy(translation = translation?.preferredLane())
+            if (result.lyric.isBlank()) return null
 
             Result(
                 songName = canonical.songName.ifBlank {
@@ -157,7 +155,7 @@ internal object KugouApi {
                     firstString(candidate, "singer", "singername", "artist")
                 },
                 album = canonical.album,
-                lyric = LyricResult(lyric = merged)
+                lyric = result
             )
         } catch (e: Exception) {
             Log.e(TAG, "[Kugou] API error", e)
