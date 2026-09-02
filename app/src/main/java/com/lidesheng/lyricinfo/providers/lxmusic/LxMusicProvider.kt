@@ -106,16 +106,12 @@ open class LxMusicProvider(
 
         val transNormalized = trans?.takeIf { it.isNotBlank() }?.let { LyricNormalizer.normalize(it) }
         val romaNormalized = roma?.takeIf { it.isNotBlank() }?.let { LyricNormalizer.normalize(it) }
-        val extras = listOfNotNull(transNormalized, romaNormalized)
-            .filter { it.lyric.isNotBlank() }
-        val merged = if (extras.isEmpty()) {
-            normalized.lyric
-        } else {
-            LyricNormalizer.merge(normalized.lyric, extras.joinToString("\n") { it.lyric })
-        }
 
         lastCapturedLyric.set(
-            LyricResult(lyric = merged)
+            normalized.copy(
+                translation = transNormalized?.preferredLane(),
+                roma = romaNormalized?.preferredLane()
+            )
         )
         refreshMediaSession()
     }
