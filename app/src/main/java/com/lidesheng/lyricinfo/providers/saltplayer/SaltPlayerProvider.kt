@@ -2,6 +2,7 @@ package com.lidesheng.lyricinfo.providers.saltplayer
 
 import android.media.MediaMetadata
 import android.media.session.MediaSession
+import android.media.session.PlaybackState
 import android.os.Handler
 import android.os.Bundle
 import android.os.Looper
@@ -10,7 +11,6 @@ import android.util.Log
 import com.lidesheng.lyricinfo.core.LyricCacheEntry
 import com.lidesheng.lyricinfo.core.LyricFileCache
 import com.lidesheng.lyricinfo.core.LyricInfoSerializer
-import com.lidesheng.lyricinfo.core.LyricNormalizer
 import com.lidesheng.lyricinfo.core.LyricProvider
 import com.lidesheng.lyricinfo.core.LyricResult
 import io.github.libxposed.api.XposedInterface
@@ -31,17 +31,15 @@ import java.util.concurrent.atomic.AtomicReference
 
 class SaltPlayerProvider : LyricProvider {
 
-    private data class SongIdentity(
-        val id: String,
-        val title: String,
-        val artist: String,
-        val album: String
-    )
-
     private data class CapturedLyric(
         val songId: String?,
         val result: LyricResult,
         val capturedAt: Long
+    )
+
+    private data class ResolvedMetadata(
+        val track: SaltTrackIdentity,
+        val relay: Boolean
     )
 
     companion object {
@@ -50,8 +48,6 @@ class SaltPlayerProvider : LyricProvider {
         private const val PACKAGE_NAME = "com.salt.music"
         private const val SALT_SONG_CLASS = "com.salt.music.data.entry.Song"
         private const val CAPTURE_BIND_WINDOW_MS = 1_500L
-        private val TIMED_LYRIC_PATTERN = Regex("""\[\d{2}:\d{2}\.\d{2,3}]""")
-        private val TRACK_TEXT_WHITESPACE = Regex("\\s+")
         private val REFRESH_DELAYS_MS = longArrayOf(0L, 50L, 150L, 350L)
     }
 
@@ -59,16 +55,13 @@ class SaltPlayerProvider : LyricProvider {
 
     private val lyricCache = ConcurrentHashMap<String, LyricResult>()
     private val lastCapturedLyric = AtomicReference<CapturedLyric?>(null)
-    private val currentSong = AtomicReference<SongIdentity?>(null)
+    private val currentSong = AtomicReference<SaltTrackIdentity?>(null)
+    private val mediaSessions = SaltMediaSessionRegistry()
     private val hookHandles = mutableListOf<XposedInterface.HookHandle>()
     private var fileCache: LyricFileCache? = null
     private var lastLoggedSongId: String? = null
     @Volatile
     private var currentSongChangedAt: Long = 0L
-    @Volatile
-    private var lastMediaSession: MediaSession? = null
-    @Volatile
-    private var lastMediaMetadata: MediaMetadata? = null
     private val refreshHandler = Handler(Looper.getMainLooper())
 
     override fun onAppLoaded(module: XposedModule, param: PackageLoadedParam) {
@@ -97,7 +90,7 @@ class SaltPlayerProvider : LyricProvider {
             Log.e(TAG, "[SaltPlayer] ✗ Hook current Song failed", e)
         }
 
-        hookMediaMetadataBuilder(module, classLoader)
+        hookMediaSession(module, classLoader)
     }
 
     override fun replaceHooks(
@@ -154,7 +147,7 @@ class SaltPlayerProvider : LyricProvider {
 
         val handle = module.hook(constructor).intercept { chain ->
             val rawLrc = chain.getArg(0) as? String ?: return@intercept chain.proceed()
-            val normalized = LyricNormalizer.normalize(rawLrc)
+            val normalized = SaltLyricLaneParser.normalize(rawLrc)
             if (normalized != null) {
                 lastCapturedLyric.set(
                     CapturedLyric(
@@ -290,9 +283,9 @@ class SaltPlayerProvider : LyricProvider {
         val album = readStringProperty(song, "getAlbum")
         val rawLyric = findTimedLyricField(lyricResult)
             .ifBlank { findRawStringField(lyricResult) }
-        val normalized = LyricNormalizer.normalize(rawLyric) ?: return
+        val normalized = SaltLyricLaneParser.normalize(rawLyric) ?: return
         val capturedAt = SystemClock.uptimeMillis()
-        val identity = SongIdentity(songId, title, artist, album)
+        val identity = SaltTrackIdentity(songId, title, artist, album)
 
         val previous = currentSong.getAndSet(identity)
         if (previous?.id != identity.id) {
@@ -348,7 +341,7 @@ class SaltPlayerProvider : LyricProvider {
                 if (field.type != String::class.java) continue
                 field.isAccessible = true
                 val value = field.get(instance) as? String ?: continue
-                if (containsTimedLyric(value)) return value
+                if (SaltLyricLaneParser.containsTimedLyric(value)) return value
             }
             currentClass = currentClass.superclass
         }
@@ -369,9 +362,6 @@ class SaltPlayerProvider : LyricProvider {
         }
         return candidate
     }
-
-    private fun containsTimedLyric(value: String): Boolean =
-        TIMED_LYRIC_PATTERN.containsMatchIn(value)
 
     private fun hookOldVersion(
         module: XposedModule,
@@ -396,7 +386,7 @@ class SaltPlayerProvider : LyricProvider {
 
         val handle = module.hook(constructor).intercept { chain ->
             val rawLrc = chain.getArg(1) as? String ?: return@intercept chain.proceed()
-            val normalized = LyricNormalizer.normalize(rawLrc)
+            val normalized = SaltLyricLaneParser.normalize(rawLrc)
             if (normalized != null) {
                 lastCapturedLyric.set(
                     CapturedLyric(
@@ -451,6 +441,7 @@ class SaltPlayerProvider : LyricProvider {
                     }
                     lastLoggedSongId = identity.id
                     Log.i(TAG, "[Song] ${identity.title} - ${identity.artist}")
+                    refreshMediaSession()
                 }
             }
             chain.proceed()
@@ -459,9 +450,9 @@ class SaltPlayerProvider : LyricProvider {
         Log.i(TAG, "[SaltPlayer] ✓ Hooked current Song transition: ${method.name}")
     }
 
-    private fun readSongIdentity(song: Any): SongIdentity? {
+    private fun readSongIdentity(song: Any): SaltTrackIdentity? {
         val id = invokeSongString(song, "getId")?.takeIf { it.isNotEmpty() } ?: return null
-        return SongIdentity(
+        return SaltTrackIdentity(
             id = id,
             title = invokeSongString(song, "getTitle").orEmpty(),
             artist = invokeSongString(song, "getArtist").orEmpty(),
@@ -475,87 +466,106 @@ class SaltPlayerProvider : LyricProvider {
         }.getOrNull()
     }
 
-    private fun hookMediaMetadataBuilder(module: XposedModule, classLoader: ClassLoader) {
-        try {
-            val builderClass = Class.forName(
-                $$"android.media.MediaMetadata$Builder", false, classLoader
-            )
-            val buildMethod = builderClass.getDeclaredMethod("build")
-            module.deoptimize(buildMethod)
-
-            val handle = module.hook(buildMethod).intercept { chain ->
-                runCatching {
-                    val builder = chain.thisObject
-                    injectLyricInfo(builderBundle(builder))
-                }.onFailure { error ->
-                    Log.w(TAG, "[SaltPlayer] Builder.build() inject failed", error)
-                }
-                chain.proceed()
-            }
-            hookHandles.add(handle)
-            Log.i(TAG, "[Hook] ✓ Builder.build()")
-        } catch (e: Exception) {
-            Log.e(TAG, "[Hook] ✗ Builder.build()", e)
-        }
-
+    /**
+     * Publish only through the active Salt MediaSession that matches the current track.
+     *
+     * Salt's car/Bluetooth lyric relay can rewrite TITLE and ARTIST. Hooking every metadata
+     * Builder or compat object would let those transient relay values become the public track
+     * identity, so this provider observes the native session boundary instead.
+     */
+    private fun hookMediaSession(module: XposedModule, classLoader: ClassLoader) {
         try {
             val sessionClass = Class.forName(
                 "android.media.session.MediaSession", false, classLoader
             )
+
+            sessionClass.declaredConstructors.forEachIndexed { index, constructor ->
+                val handle = module.hook(constructor).intercept { chain ->
+                    val result = chain.proceed()
+                    (chain.thisObject as? MediaSession)?.let { session ->
+                        val tag = chain.getArgs().firstOrNull { it is String } as? String
+                        mediaSessions.onConstructed(session, tag)
+                    }
+                    result
+                }
+                hookHandles.add(handle)
+            }
+
             val setMetadataMethod = sessionClass.getDeclaredMethod(
                 "setMetadata", MediaMetadata::class.java
             )
             module.deoptimize(setMetadataMethod)
-            val handle = module.hook(setMetadataMethod).intercept { chain ->
-                val session = chain.thisObject
+            hookHandles.add(module.hook(setMetadataMethod).intercept { chain ->
+                val session = chain.thisObject as? MediaSession
                 val metadata = chain.getArg(0) as? MediaMetadata
-                lastMediaSession = session as? MediaSession
-                if (metadata != null) {
-                    lastMediaMetadata = metadata
-                    runCatching {
-                        injectLyricInfo(metadataBundle(metadata))
-                    }.onFailure { error ->
-                        Log.w(TAG, "[SaltPlayer] MediaSession.setMetadata() inject failed", error)
-                    }
-                } else {
-                    lastMediaMetadata = null
+                val moduleWrite = mediaSessions.isModuleWrite()
+
+                if (!moduleWrite && session != null) {
+                    val resolved = metadata?.let(::resolveMetadataIdentity)
+                    mediaSessions.onHostMetadata(session, resolved?.track, metadata)
                 }
-                chain.proceed()
-            }
-            hookHandles.add(handle)
+
+                val result = chain.proceed()
+
+                if (!moduleWrite && session != null && metadata != null) {
+                    publishCurrentSession(session)
+                }
+                result
+            })
             Log.i(TAG, "[Hook] ✓ MediaSession.setMetadata()")
-        } catch (e: Exception) {
-            Log.e(TAG, "[Hook] ✗ MediaSession.setMetadata()", e)
-        }
 
-        hookCompatMediaMetadata(module, classLoader)
-    }
-
-    /**
-     * SaltPlayer's support-media classes are R8-shrunk, so the usual compat
-     * Builder/Session method names are not present in this APK. Its stable
-     * compat entry point is MediaMetadataCompat(Bundle), which copies the
-     * bundle before media3 submits the resulting framework metadata.
-     */
-    private fun hookCompatMediaMetadata(module: XposedModule, classLoader: ClassLoader) {
-        try {
-            val metadataClass = classLoader.loadClass(
-                "android.support.v4.media.MediaMetadataCompat"
+            val setPlaybackStateMethod = sessionClass.getDeclaredMethod(
+                "setPlaybackState", PlaybackState::class.java
             )
-            val constructor = metadataClass.getDeclaredConstructor(Bundle::class.java)
-            val handle = module.hook(constructor).intercept { chain ->
-                runCatching {
-                    val bundle = chain.getArg(0) as? Bundle
-                    if (bundle != null) injectLyricInfo(bundle)
-                }.onFailure { error ->
-                    Log.w(TAG, "[SaltPlayer] Compat metadata inject failed", error)
+            module.deoptimize(setPlaybackStateMethod)
+            hookHandles.add(module.hook(setPlaybackStateMethod).intercept { chain ->
+                val session = chain.thisObject as? MediaSession
+                val moduleWrite = mediaSessions.isModuleWrite()
+                val result = chain.proceed()
+
+                if (!moduleWrite && session != null) {
+                    val state = (chain.getArg(0) as? PlaybackState)?.state
+                        ?: PlaybackState.STATE_NONE
+                    val previousState = mediaSessions.onPlaybackState(session, state)
+                    if (lastCapturedLyric.get() != null ||
+                        (!SaltMediaSessionRegistry.isPlaybackStateValid(previousState) &&
+                            SaltMediaSessionRegistry.isPlaybackStateValid(state))
+                    ) {
+                        publishCurrentSession(session)
+                    }
+                }
+                result
+            })
+
+            val setActiveMethod = sessionClass.getDeclaredMethod(
+                "setActive", Boolean::class.javaPrimitiveType
+            )
+            module.deoptimize(setActiveMethod)
+            hookHandles.add(module.hook(setActiveMethod).intercept { chain ->
+                val session = chain.thisObject as? MediaSession
+                val moduleWrite = mediaSessions.isModuleWrite()
+                val result = chain.proceed()
+
+                if (!moduleWrite && session != null) {
+                    val active = chain.getArg(0) as? Boolean ?: false
+                    mediaSessions.onActive(session, active)
+                    if (active) publishCurrentSession(session)
+                }
+                result
+            })
+
+            val releaseMethod = sessionClass.getDeclaredMethod("release")
+            module.deoptimize(releaseMethod)
+            hookHandles.add(module.hook(releaseMethod).intercept { chain ->
+                val session = chain.thisObject as? MediaSession
+                if (!mediaSessions.isModuleWrite() && session != null) {
+                    mediaSessions.onReleased(session)
                 }
                 chain.proceed()
-            }
-            hookHandles.add(handle)
-            Log.i(TAG, "[Hook] ✓ MediaMetadataCompat(Bundle)")
+            })
+            Log.i(TAG, "[Hook] ✓ MediaSession lifecycle")
         } catch (e: Exception) {
-            Log.w(TAG, "[Hook] Compat metadata constructor unavailable", e)
+            Log.e(TAG, "[Hook] ✗ MediaSession lifecycle", e)
         }
     }
 
@@ -566,27 +576,45 @@ class SaltPlayerProvider : LyricProvider {
     }
 
     private fun refreshMediaSessionNow() {
-        val session = lastMediaSession ?: return
-        val metadata = lastMediaMetadata ?: return
+        val identity = currentSong.get() ?: return
+        val session = mediaSessions.selectUnique(identity) ?: return
+        publishCurrentSession(session)
+    }
+
+    private fun publishCurrentSession(session: MediaSession) {
+        if (mediaSessions.isModuleWrite()) return
+
+        val metadata = mediaSessions.hostMetadata(session) ?: return
+        val identity = resolveBuildIdentity(metadata) ?: return
+        if (mediaSessions.selectUnique(identity) !== session) return
+
         try {
-            val bundle = metadataBundle(metadata)
-            val metadataIdentity = resolveBuildIdentity(bundle) ?: return
-            val captured = lastCapturedLyric.get()
-            if (captured != null && !capturedMatches(captured, metadataIdentity) &&
-                lyricCache[metadataIdentity.id] == null
+            val builder = MediaMetadata.Builder(metadata)
+            if (!injectLyricInfo(builderBundle(builder))) return
+
+            val patchedMetadata = builder.build()
+            if (patchedMetadata.getString(LYRIC_INFO_KEY) ==
+                metadata.getString(LYRIC_INFO_KEY)
             ) {
+                mediaSessions.onHostMetadata(
+                    session,
+                    resolveMetadataIdentity(metadata)?.track,
+                    metadata
+                )
                 return
             }
-            if (!injectLyricInfo(bundle)) return
 
-            // Rebuild the object after changing its backing Bundle. This makes the
-            // post-lyrics refresh visible to MediaSession and its remote controllers.
-            val refreshedMetadata = MediaMetadata.Builder(metadata).build()
-            lastMediaMetadata = refreshedMetadata
-            session.setMetadata(refreshedMetadata)
-            Log.d(TAG, "[SaltPlayer] ✓ Refreshed MediaSession metadata")
+            mediaSessions.withModuleWrite {
+                session.setMetadata(patchedMetadata)
+            }
+            mediaSessions.onHostMetadata(
+                session,
+                resolveMetadataIdentity(patchedMetadata)?.track,
+                patchedMetadata
+            )
+            Log.d(TAG, "[SaltPlayer] ✓ Published MediaSession metadata")
         } catch (e: Exception) {
-            Log.w(TAG, "[SaltPlayer] ✗ Refresh MediaSession metadata failed", e)
+            Log.w(TAG, "[SaltPlayer] ✗ MediaSession metadata publish failed", e)
         }
     }
 
@@ -647,69 +675,88 @@ class SaltPlayerProvider : LyricProvider {
         return true
     }
 
-    private fun capturedMatches(captured: CapturedLyric, identity: SongIdentity): Boolean {
+    private fun capturedMatches(captured: CapturedLyric, identity: SaltTrackIdentity): Boolean {
         val currentIdentity = currentSong.get()
         if (currentIdentity == null) return captured.songId == identity.id
         if (captured.songId != null && captured.songId != currentIdentity.id) return false
-        if (!sameTrack(currentIdentity, identity)) return false
+        if (!SaltTrackIdentityPolicy.isSameTrack(currentIdentity, identity)) return false
         return currentSongChangedAt == 0L || captured.capturedAt >= currentSongChangedAt
     }
 
-    private fun resolveBuildIdentity(bundle: Bundle): SongIdentity? {
-        val metadataIdentity = readMetadataIdentity(bundle)
+    private fun resolveBuildIdentity(bundle: Bundle): SaltTrackIdentity? =
+        resolveStableIdentity(resolveMetadataIdentity(bundle))
+
+    private fun resolveBuildIdentity(metadata: MediaMetadata): SaltTrackIdentity? =
+        resolveStableIdentity(resolveMetadataIdentity(metadata))
+
+    private fun resolveStableIdentity(metadata: ResolvedMetadata?): SaltTrackIdentity? {
         val currentIdentity = currentSong.get()
-        if (metadataIdentity == null) return currentIdentity
-        if (currentIdentity == null || !sameTrack(currentIdentity, metadataIdentity)) {
-            return metadataIdentity
+        if (metadata == null) return currentIdentity
+        if (currentIdentity == null) return metadata.track.takeUnless { metadata.relay }
+
+        if (!SaltTrackIdentityPolicy.isSameTrack(currentIdentity, metadata.track)) {
+            return metadata.track.takeUnless { metadata.relay }
         }
-        return currentIdentity.copy(
-            title = metadataIdentity.title.ifBlank { currentIdentity.title },
-            artist = metadataIdentity.artist.ifBlank { currentIdentity.artist },
-            album = metadataIdentity.album.ifBlank { currentIdentity.album }
-        )
+        return currentIdentity
     }
 
-    private fun readMetadataIdentity(bundle: Bundle): SongIdentity? {
-        val mediaId = bundle.getString(MediaMetadata.METADATA_KEY_MEDIA_ID).orEmpty()
-        val title = bundle.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty()
-        val artist = bundle.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty()
-        val album = bundle.getString(MediaMetadata.METADATA_KEY_ALBUM).orEmpty()
-        if (mediaId.isBlank() && title.isBlank() && artist.isBlank() && album.isBlank()) {
-            return null
-        }
-        val fallbackKey = "$title|$artist|${bundle.getLong(MediaMetadata.METADATA_KEY_DURATION)}"
-            .hashCode()
-            .toString()
-        return SongIdentity(
-            id = mediaId.ifBlank { fallbackKey },
+    private fun resolveMetadataIdentity(bundle: Bundle): ResolvedMetadata? =
+        resolveMetadataIdentity(
+            mediaId = bundle.getString(MediaMetadata.METADATA_KEY_MEDIA_ID),
+            title = bundle.getString(MediaMetadata.METADATA_KEY_TITLE),
+            artist = bundle.getString(MediaMetadata.METADATA_KEY_ARTIST),
+            displayTitle = bundle.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE),
+            displaySubtitle = bundle.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE),
+            album = bundle.getString(MediaMetadata.METADATA_KEY_ALBUM),
+            duration = bundle.getLong(MediaMetadata.METADATA_KEY_DURATION)
+        )
+
+    private fun resolveMetadataIdentity(metadata: MediaMetadata): ResolvedMetadata? =
+        resolveMetadataIdentity(
+            mediaId = metadata.getString(MediaMetadata.METADATA_KEY_MEDIA_ID),
+            title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE),
+            artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST),
+            displayTitle = metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE),
+            displaySubtitle = metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE),
+            album = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM),
+            duration = metadata.getLong(MediaMetadata.METADATA_KEY_DURATION)
+        )
+
+    private fun resolveMetadataIdentity(
+        mediaId: String?,
+        title: String?,
+        artist: String?,
+        displayTitle: String?,
+        displaySubtitle: String?,
+        album: String?,
+        duration: Long
+    ): ResolvedMetadata? {
+        val resolved = SaltBluetoothLyricRelayPolicy.resolveFields(
+            mediaId = mediaId,
             title = title,
             artist = artist,
+            displayTitle = displayTitle,
+            displaySubtitle = displaySubtitle,
             album = album
+        ) ?: return null
+        val fallbackKey = "${resolved.title}|${resolved.artist}|$duration"
+            .hashCode()
+            .toString()
+        return ResolvedMetadata(
+            track = SaltTrackIdentity(
+                id = resolved.mediaId ?: fallbackKey,
+                title = resolved.title,
+                artist = resolved.artist,
+                album = resolved.album
+            ),
+            relay = resolved.relay
         )
     }
 
-    private fun sameTrack(first: SongIdentity, second: SongIdentity): Boolean {
-        val titleMatches = first.title.isBlank() || second.title.isBlank() ||
-            sameTrackText(first.title, second.title)
-        val artistMatches = first.artist.isBlank() || second.artist.isBlank() ||
-            sameTrackText(first.artist, second.artist)
-        if (!titleMatches || !artistMatches) return false
-        return first.id == second.id ||
-            (first.title.isNotBlank() && second.title.isNotBlank())
-    }
-
-    private fun sameTrackText(first: String, second: String): Boolean =
-        first.replace(TRACK_TEXT_WHITESPACE, " ").trim()
-            .equals(second.replace(TRACK_TEXT_WHITESPACE, " ").trim(), ignoreCase = true)
 
     private fun builderBundle(builder: Any): Bundle {
         val field = builder.javaClass.getDeclaredField("mBundle").apply { isAccessible = true }
         return field.get(builder) as Bundle
-    }
-
-    private fun metadataBundle(metadata: MediaMetadata): Bundle {
-        val field = metadata.javaClass.getDeclaredField("mBundle").apply { isAccessible = true }
-        return field.get(metadata) as Bundle
     }
 
     override fun onDestroy() {
@@ -720,8 +767,7 @@ class SaltPlayerProvider : LyricProvider {
         hookHandles.clear()
         lastLoggedSongId = null
         currentSongChangedAt = 0L
-        lastMediaSession = null
-        lastMediaMetadata = null
+        mediaSessions.clear()
         refreshHandler.removeCallbacksAndMessages(null)
     }
 }

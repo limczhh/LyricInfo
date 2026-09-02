@@ -75,6 +75,6 @@ internal class LyricFileCache(private val cacheDir: File) {
     companion object {
         private const val TAG = "LyricInfo"
         private const val CACHE_VERSION_KEY = "cacheVersion"
-        private const val CACHE_VERSION = 2
+        private const val CACHE_VERSION = 3
     }
 }
