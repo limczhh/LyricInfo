@@ -1,6 +1,8 @@
 package com.lidesheng.lyricinfo.providers.qishui
 
 import android.util.Log
+import com.lidesheng.lyricinfo.core.LyricNormalizer
+import com.lidesheng.lyricinfo.core.LyricResult
 
 /**
  * KRC (Kugou/KTV) lyric format parser.
@@ -11,7 +13,7 @@ import android.util.Log
  * Word-level timestamps are relative to the line start time.
  * Untagged characters inherit timing from the previous word's end.
  *
- * Output: Enhanced LRC (elrc) format with optional merged translations.
+ * Output: independent line-level and optional enhanced original lanes.
  */
 object KrcParser {
 
@@ -25,6 +27,60 @@ object KrcParser {
 
     // Line-level LRC time: [mm:ss.xxx] or [mm:ss.xx]
     private val LRC_TIME_TAG = Regex("""\[\d{2}:\d{2}\.\d{2,3}]""")
+
+    /** Parse one lyric lane without combining it with any other lane. */
+    fun parse(type: String?, content: String?): LyricResult? {
+        if (content.isNullOrBlank()) return null
+
+        return when (type?.lowercase()) {
+            "krc" -> parseKrcResult(content)
+            "lrc" -> parseLrcResult(content)
+            "elrc" -> LyricNormalizer.normalize(content)
+            else -> null
+        }
+    }
+
+    private fun parseKrcResult(content: String): LyricResult? {
+        val lines = parseKrcToLines(content)
+        if (lines.isEmpty()) return null
+
+        val lyric = lines.joinToString("\n") { line ->
+            "${formatLrcTime(line.startMs)}${line.text}"
+        }.trim()
+        if (lyric.isBlank()) return null
+
+        val hasTimedWords = lines.any { line ->
+            line.words.any { it.timed && it.text.isNotEmpty() }
+        }
+        val rawLyric = if (hasTimedWords) {
+            renderKrc(lines)
+        } else {
+            null
+        }
+        return LyricResult(lyric = lyric, rawLyric = rawLyric)
+    }
+
+    private fun parseLrcResult(content: String): LyricResult? {
+        val lines = parseLrcToLines(content)
+        if (lines.isEmpty()) return null
+        val lyric = lines.joinToString("\n") { line ->
+            "${formatLrcTime(line.startMs)}${line.text}"
+        }.trim()
+        return lyric.takeIf { it.isNotBlank() }?.let { LyricResult(lyric = it) }
+    }
+
+    private fun renderKrc(lines: List<ParsedLine>): String {
+        return lines.joinToString("\n") { line ->
+            buildString {
+                append(formatLrcTime(line.startMs))
+                for (word in line.words) {
+                    if (word.text.isEmpty()) continue
+                    if (word.timed) append(formatElrcTime(word.beginMs))
+                    append(word.text)
+                }
+            }
+        }.trim()
+    }
 
     /**
      * Parse lyrics and merge with translation, returning elrc format.
@@ -134,7 +190,7 @@ object KrcParser {
                         val offsetMs = tagMatch.groupValues[1].toLong()
                         val wordDurMs = tagMatch.groupValues[2].toLong()
                         val wordBeginMs = startMs + offsetMs
-                        words.add(Word(wordBeginMs, wordDurMs, wordText))
+                        words.add(Word(wordBeginMs, wordDurMs, wordText, timed = true))
                         prevEndMs = wordBeginMs + wordDurMs
                         pos = tagMatch.range.last + 1
                         continue
@@ -143,7 +199,7 @@ object KrcParser {
 
                 // No tag follows — untagged word
                 val inferredBegin = prevEndMs ?: startMs
-                words.add(Word(inferredBegin, 0L, wordText))
+                words.add(Word(inferredBegin, 0L, wordText, timed = false))
             }
 
             val text = body.replace(WORD_TAG, "")
@@ -249,6 +305,7 @@ object KrcParser {
     private data class Word(
         val beginMs: Long,
         val durationMs: Long,
-        val text: String
+        val text: String,
+        val timed: Boolean
     )
 }

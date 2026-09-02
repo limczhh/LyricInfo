@@ -129,16 +129,17 @@ class QishuiProvider : BaseLyricProvider() {
             val translations = lyric.optJSONObject("lang_translations")
             val translationResult = findTranslation(translations)
 
-            val merged = KrcParser.parseAndMerge(type, content, translationResult?.first, translationResult?.second)
-            if (merged.isNullOrBlank()) return null
-
-            val hasTranslation = translationResult != null
-            Log.d(TAG, "[Qishui] Parsed $type: ${merged.length} chars, translation=$hasTranslation (${translationResult?.first})")
-
-            // Translation lines are always merged as plain LRC (no word-level tags)
-            LyricResult(
-                lyric = merged
+            val original = KrcParser.parse(type, content) ?: return null
+            val translation = translationResult?.let { (transType, transContent) ->
+                KrcParser.parse(transType, transContent)
+            }
+            val result = original.copy(translation = translation?.preferredLane())
+            Log.d(
+                TAG,
+                "[Qishui] Parsed $type: ${result.lyric.length} chars, " +
+                    "raw=${result.rawLyric != null}, translation=${translation != null} (${translationResult?.first})"
             )
+            result
         } catch (e: Exception) {
             Log.e(TAG, "[Qishui] Failed to parse cache: mediaId=$mediaId", e)
             null
@@ -392,17 +393,11 @@ class QishuiProvider : BaseLyricProvider() {
         val original = extractRawLyric(lyricObject) ?: return null
         val translations = invokeNoArg(lyricObject, "getLangTranslations") as? Map<*, *>
         val translation = findAppTranslation(translations)
-        val merged = KrcParser.parseAndMerge(
-            original.type,
-            original.content,
-            translation?.type,
-            translation?.content
-        ) ?: return null
-        if (merged.isBlank()) return null
-
-        return LyricResult(
-            lyric = merged
-        )
+        val originalResult = KrcParser.parse(original.type, original.content) ?: return null
+        val translationResult = translation?.let {
+            KrcParser.parse(it.type, it.content)
+        }
+        return originalResult.copy(translation = translationResult?.preferredLane())
     }
 
     private fun extractRawLyric(value: Any?): RawLyric? {
