@@ -82,10 +82,7 @@ internal object QQMusicApi {
     }
 
     /**
-     * 获取歌词。返回 LyricResult：
-     * - lyric: 原文 + 翻译按时间戳合并（QRC 自动转为 elrc 逐字歌词优先，否则标准 LRC）
-     * - format: 歌词格式（elrc 或 lrc）
-     * - translation: 翻译行的格式指示（elrc 或 lrc），无翻译时默认 lrc
+     * 获取歌词。QRC 逐字数据会同时生成标准原文和可信逐字原文，翻译独立保存。
      */
     fun fetchLyric(musicId: String): LyricResult? {
         return try {
@@ -107,17 +104,9 @@ internal object QQMusicApi {
             val normalized = LyricNormalizer.normalize(rawLyric)
                 ?: return null
 
-            // Normalize and merge translation
+            // Keep QQ's translation as an independent lane.
             val transNormalized = translationLrc?.let { LyricNormalizer.normalize(it) }
-            val merged = if (transNormalized != null) {
-                LyricNormalizer.merge(normalized.lyric, transNormalized.lyric)
-            } else {
-                normalized.lyric
-            }
-
-            LyricResult(
-                lyric = merged
-            )
+            normalized.copy(translation = transNormalized?.preferredLane())
         } catch (e: Exception) {
             Log.e(TAG, "[QQMusic] API error: ${e.message}")
             null
