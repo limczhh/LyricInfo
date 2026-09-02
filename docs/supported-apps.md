@@ -23,7 +23,7 @@
 | 荣耀定制版网易云 | `com.hihonor.cloudmusic` | 逐字歌词、翻译 |
 | QQ 音乐 | `com.tencent.qqmusic` | 逐字歌词、翻译 |
 | 酷狗音乐 | `com.kugou.android` | 逐字歌词、翻译 |
-| 小米音乐 | `com.miui.player` | 逐字歌词、翻译 |
+| 小米音乐 | `com.miui.player` | 逐字歌词 |
 | 汽水音乐 | `com.luna.music` | 逐字歌词、翻译 |
 | 椒盐音乐 | `com.salt.music` | 逐字歌词、翻译 |
 | LX Music | `cn.toside.music.mobile` | 逐字歌词、翻译、罗马音 |
