@@ -159,7 +159,7 @@ class SaltPlayerProvider : LyricProvider {
                 lastCapturedLyric.set(
                     CapturedLyric(
                         currentSong.get()?.id,
-                        LyricResult(lyric = normalized.lyric),
+                        normalized,
                         SystemClock.uptimeMillis()
                     )
                 )
@@ -301,7 +301,7 @@ class SaltPlayerProvider : LyricProvider {
         lastCapturedLyric.set(
             CapturedLyric(
                 songId = songId,
-                result = LyricResult(lyric = normalized.lyric),
+                result = normalized,
                 capturedAt = capturedAt
             )
         )
@@ -401,7 +401,7 @@ class SaltPlayerProvider : LyricProvider {
                 lastCapturedLyric.set(
                     CapturedLyric(
                         currentSong.get()?.id,
-                        LyricResult(lyric = normalized.lyric),
+                        normalized,
                         SystemClock.uptimeMillis()
                     )
                 )
@@ -710,27 +710,6 @@ class SaltPlayerProvider : LyricProvider {
     private fun metadataBundle(metadata: MediaMetadata): Bundle {
         val field = metadata.javaClass.getDeclaredField("mBundle").apply { isAccessible = true }
         return field.get(metadata) as Bundle
-    }
-
-    private fun detectTranslationFormat(lyrics: String): String {
-        val lrcTag = Regex("""\[\d{2}:\d{2}\.\d{2,3}]""")
-        val elrcTag = Regex("""<\d{2}:\d{2}\.\d{2,3}>""")
-        val groups = LinkedHashMap<String, MutableList<String>>()
-
-        for (line in lyrics.lines()) {
-            val tag = lrcTag.find(line)?.value ?: continue
-            groups.getOrPut(tag) { mutableListOf() }.add(line)
-        }
-
-        for ((_, lines) in groups) {
-            if (lines.size < 2) continue
-            for (i in 1 until lines.size) {
-                val body = lines[i].substringAfter("]")
-                if (elrcTag.containsMatchIn(body)) return "elrc"
-            }
-            return "lrc"
-        }
-        return ""
     }
 
     override fun onDestroy() {
