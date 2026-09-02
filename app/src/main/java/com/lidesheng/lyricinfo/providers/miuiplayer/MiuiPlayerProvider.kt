@@ -6,7 +6,6 @@ import android.util.Log
 import com.lidesheng.lyricinfo.core.LyricCacheEntry
 import com.lidesheng.lyricinfo.core.LyricFileCache
 import com.lidesheng.lyricinfo.core.LyricInfoSerializer
-import com.lidesheng.lyricinfo.core.LyricNormalizer
 import com.lidesheng.lyricinfo.core.LyricProvider
 import com.lidesheng.lyricinfo.core.LyricResult
 import io.github.libxposed.api.XposedInterface
@@ -118,13 +117,10 @@ class MiuiPlayerProvider : LyricProvider {
                         // 避免对同一首歌的 Lyric 对象进行重复的反射解析
                         if (songKey != lastParsedSongKey) {
                             lastParsedSongKey = songKey
-                            val elrcLyric = buildElrcLyric(lyricObj, lyricClass)
-                            val normalized = elrcLyric
-                                .takeIf { it.isNotBlank() }
-                                ?.let { LyricNormalizer.normalize(it) }
-                            if (normalized != null) {
+                            val lyricResult = buildLyricResult(lyricObj, lyricClass)
+                            if (lyricResult != null) {
                                 lastCapturedLyric.set(
-                                    CapturedLyric(track, normalized)
+                                    CapturedLyric(track, lyricResult)
                                 )
                                 Log.d(TAG, "[MiPlayer] ✓ Parsed full ELRC lyrics for: ${track.songName}")
                                 
@@ -313,8 +309,10 @@ class MiuiPlayerProvider : LyricProvider {
         }
     }
 
-    private fun buildElrcLyric(lyricObj: Any, lyricClass: Class<*>): String {
-        val builder = StringBuilder()
+    private fun buildLyricResult(lyricObj: Any, lyricClass: Class<*>): LyricResult? {
+        val lyricBuilder = StringBuilder()
+        val rawBuilder = StringBuilder()
+        var hasWordTiming = false
         val sentencesField = lyricClass.getDeclaredField("mSentences").apply { isAccessible = true }
         val mSentences = sentencesField.get(lyricObj) as? List<*>
 
@@ -328,8 +326,11 @@ class MiuiPlayerProvider : LyricProvider {
                 val mCharacters = sClass.getDeclaredField("mCharacters").apply { isAccessible = true }.get(sentence) as? List<*>
                 
                 // 行级时间戳: [mm:ss.SSS]
-                builder.append("[${formatTime(mStartTime)}]")
+                val lineTag = "[${formatTime(mStartTime)}]"
+                lyricBuilder.append(lineTag)
+                rawBuilder.append(lineTag)
                 
+                val timedWords = mutableListOf<Pair<Long, String>>()
                 if (!mCharacters.isNullOrEmpty()) {
                     for (charObj in mCharacters) {
                         if (charObj == null) continue
@@ -343,17 +344,35 @@ class MiuiPlayerProvider : LyricProvider {
                         } catch (e: Exception) {
                             ""
                         }
-                        // 词级时间戳: <mm:ss.SSS>
-                        builder.append("<${formatTime(wordStartTime)}>$word")
+                        if (word.isNotEmpty()) {
+                            timedWords += wordStartTime to word
+                        }
                     }
-                } else {
-                    // 没有逐字数据，降级为整行文本
-                    builder.append(mText)
                 }
-                builder.append("\n")
+
+                if (timedWords.isEmpty()) {
+                    // 没有逐字数据，降级为整行文本
+                    lyricBuilder.append(mText)
+                    rawBuilder.append(mText)
+                } else {
+                    hasWordTiming = true
+                    timedWords.forEach { (wordStartTime, word) ->
+                        lyricBuilder.append(word)
+                        // 词级时间戳: <mm:ss.SSS>
+                        rawBuilder.append("<${formatTime(wordStartTime)}>$word")
+                    }
+                }
+                lyricBuilder.append("\n")
+                rawBuilder.append("\n")
             }
         }
-        return builder.toString().trimEnd()
+
+        val lyric = lyricBuilder.toString().trimEnd()
+        if (lyric.isBlank()) return null
+        return LyricResult(
+            lyric = lyric,
+            rawLyric = rawBuilder.toString().trimEnd().takeIf { hasWordTiming }
+        )
     }
 
     private fun formatTime(ms: Long): String {
