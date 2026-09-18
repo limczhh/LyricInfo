@@ -9,6 +9,7 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.Locale
 
 internal object NeteaseApi {
 
@@ -108,11 +109,113 @@ internal object NeteaseApi {
 
             // Keep translation as an independent lane. It may itself be enhanced LRC.
             val transNormalized = translation?.let { LyricNormalizer.normalize(it) }
-            normalized.copy(translation = transNormalized?.preferredLane())
+            val translationLane = transNormalized?.preferredLane()
+            normalized.copy(
+                translation = translationLane?.let {
+                    alignTranslationTimestamps(normalized.lyric, it)
+                }
+            )
         } catch (e: Exception) {
             Log.e(TAG, "[Netease] API error: ${e.message}")
             null
         }
+    }
+
+    /**
+     * Netease's tlyric is returned for the same song and in the same lyric-line
+     * order as the primary lane, but its LRC timestamps can use a different
+     * timing source. Canonicalize the independent translation lane to the
+     * primary line timestamps so consumers can match the lanes exactly.
+     *
+     * This is intentionally conservative: a count mismatch or invalid time
+     * order means that line-order correspondence is not established, so the
+     * original translation is kept unchanged.
+     */
+    private fun alignTranslationTimestamps(original: String, translation: String): String {
+        val originalLines = parseTimedLines(original)
+        val translationLines = parseTimedLines(translation)
+        if (originalLines.isEmpty() || translationLines.isEmpty()) {
+            Log.w(
+                TAG,
+                "[Netease] Keep translation timestamps: missing timed lines " +
+                    "(original=${originalLines.size}, translation=${translationLines.size})"
+            )
+            return translation
+        }
+
+        if (originalLines.size != translationLines.size) {
+            Log.w(
+                TAG,
+                "[Netease] Keep translation timestamps: line count mismatch " +
+                    "(original=${originalLines.size}, translation=${translationLines.size})"
+            )
+            return translation
+        }
+
+        if (!isNonDecreasing(originalLines) || !isNonDecreasing(translationLines)) {
+            Log.w(TAG, "[Netease] Keep translation timestamps: invalid time order")
+            return translation
+        }
+
+        val outputLines = translation.lines().toMutableList()
+        var changed = 0
+        translationLines.forEachIndexed { index, translationLine ->
+            val targetTimeMs = originalLines[index].timeMs
+            if (translationLine.timeMs == targetTimeMs) return@forEachIndexed
+
+            val line = outputLines[translationLine.lineIndex]
+            val timeTag = LRC_LINE_TIME_PATTERN.find(line) ?: return@forEachIndexed
+            outputLines[translationLine.lineIndex] = line.replaceRange(
+                timeTag.range,
+                formatLrcTimestamp(targetTimeMs)
+            )
+            changed++
+        }
+
+        if (changed > 0) {
+            Log.i(
+                TAG,
+                "[Netease] Aligned translation timestamps by line order: " +
+                    "lines=${originalLines.size}, changed=$changed"
+            )
+            return outputLines.joinToString("\n")
+        }
+
+        Log.d(TAG, "[Netease] Translation timestamps already aligned")
+        return translation
+    }
+
+    private data class TimedLine(
+        val lineIndex: Int,
+        val timeMs: Long
+    )
+
+    private val LRC_LINE_TIME_PATTERN = Regex("""\[(\d{2}):(\d{2})\.(\d{2,3})]""")
+
+    private fun parseTimedLines(content: String): List<TimedLine> =
+        content.lines().mapIndexedNotNull { lineIndex, line ->
+            val match = LRC_LINE_TIME_PATTERN.find(line) ?: return@mapIndexedNotNull null
+            val minutes = match.groupValues[1].toLongOrNull() ?: return@mapIndexedNotNull null
+            val seconds = match.groupValues[2].toLongOrNull() ?: return@mapIndexedNotNull null
+            val fraction = match.groupValues[3]
+            val millis = fraction.toLongOrNull()?.let {
+                if (fraction.length == 2) it * 10 else it
+            } ?: return@mapIndexedNotNull null
+            TimedLine(
+                lineIndex = lineIndex,
+                timeMs = minutes * 60_000L + seconds * 1_000L + millis
+            )
+        }
+
+    private fun isNonDecreasing(lines: List<TimedLine>): Boolean =
+        lines.zipWithNext().all { (current, next) -> current.timeMs <= next.timeMs }
+
+    private fun formatLrcTimestamp(timeMs: Long): String {
+        val totalSeconds = timeMs / 1_000L
+        val minutes = totalSeconds / 60L
+        val seconds = totalSeconds % 60L
+        val millis = timeMs % 1_000L
+        return String.format(Locale.ROOT, "[%02d:%02d.%03d]", minutes, seconds, millis)
     }
 
     /**
