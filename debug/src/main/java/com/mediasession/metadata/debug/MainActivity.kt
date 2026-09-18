@@ -14,7 +14,7 @@ class MainActivity : Activity() {
             appendLine("Hooks SystemUI MediaController.Callback")
             appendLine("Dumps all MediaSession metadata changes")
             appendLine()
-            appendLine("Filter: adb logcat -s LyricInfoDebug")
+            appendLine("Filter: adb logcat -s MediaSessionDebug")
         }
         tv.setPadding(32, 32, 32, 32)
         tv.textSize = 16f

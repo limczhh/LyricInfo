@@ -13,6 +13,9 @@ class HookEntry : XposedModule() {
 
     companion object {
         private const val TAG = "MediaSessionDebug"
+        private const val LYRIC_INFO_KEY = "lyricInfo"
+        private const val STRING_PREVIEW_LENGTH = 200
+        private const val LOG_CHUNK_LENGTH = 800
     }
 
     private var currentPackageReadyParam: PackageReadyParam? = null
@@ -80,9 +83,13 @@ class HookEntry : XposedModule() {
                                     Log.d(TAG, "${prefix}  $fieldName ($fieldType) = Bitmap")
                                 }
                             }
-                            value is String && value.length > 200 -> {
-                                Log.d(TAG, "${prefix}  $fieldName ($fieldType) = ${value.take(200)}... (${value.length} chars)")
-                            }
+                            value is String -> logString(
+                                prefix = prefix,
+                                name = fieldName,
+                                type = fieldType,
+                                value = value,
+                                dumpFully = fieldName == LYRIC_INFO_KEY
+                            )
                             value is android.os.Bundle -> {
                                 Log.d(TAG, "${prefix}  $fieldName ($fieldType) = Bundle:")
                                 dumpBundle(value, "$prefix    ")
@@ -119,15 +126,63 @@ class HookEntry : XposedModule() {
                             Log.d(TAG, "${prefix}  $key = Bitmap")
                         }
                     }
-                    value is String && value.length > 200 -> {
-                        Log.d(TAG, "${prefix}  $key = ${value.take(200)}... (${value.length} chars)")
-                    }
+                    value is String -> logString(
+                        prefix = prefix,
+                        name = key,
+                        type = value.javaClass.simpleName,
+                        value = value,
+                        dumpFully = key == LYRIC_INFO_KEY
+                    )
                     else -> Log.d(TAG, "${prefix}  $key = $value")
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "${prefix}Bundle dump failed", e)
         }
+    }
+
+    private fun logString(
+        prefix: String,
+        name: String,
+        type: String,
+        value: String,
+        dumpFully: Boolean
+    ) {
+        if (!dumpFully || value.length <= STRING_PREVIEW_LENGTH) {
+            if (value.length > STRING_PREVIEW_LENGTH) {
+                Log.d(TAG, "${prefix}  $name = ${value.take(STRING_PREVIEW_LENGTH)}... (${value.length} chars)")
+            } else {
+                Log.d(TAG, "${prefix}  $name ($type) = $value")
+            }
+            return
+        }
+
+        val chunks = value.chunkForLog()
+        Log.d(
+            TAG,
+            "${prefix}  $name ($type) = <full ${value.length} chars, ${chunks.size} chunks>"
+        )
+        chunks.forEachIndexed { index, chunk ->
+            Log.d(TAG, "${prefix}    $name[${index + 1}/${chunks.size}] = $chunk")
+        }
+        Log.d(TAG, "${prefix}  $name ($type) = </full>")
+    }
+
+    private fun String.chunkForLog(): List<String> {
+        val chunks = mutableListOf<String>()
+        var start = 0
+        while (start < length) {
+            var end = minOf(start + LOG_CHUNK_LENGTH, length)
+            if (end < length && Character.isHighSurrogate(this[end - 1])) {
+                end--
+            }
+            if (end == start) {
+                end = minOf(start + LOG_CHUNK_LENGTH, length)
+            }
+            chunks += substring(start, end)
+            start = end
+        }
+        return chunks
     }
 
     override fun onHotReloading(param: HotReloadingParam): Boolean {
