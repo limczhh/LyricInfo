@@ -8,7 +8,9 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.util.Locale
 import java.util.regex.Pattern
+import kotlin.math.abs
 
 internal object QQMusicApi {
 
@@ -104,13 +106,137 @@ internal object QQMusicApi {
             val normalized = LyricNormalizer.normalize(rawLyric)
                 ?: return null
 
-            // Keep QQ's translation as an independent lane.
-            val transNormalized = translationLrc?.let { LyricNormalizer.normalize(it) }
-            normalized.copy(translation = transNormalized?.preferredLane())
+            // QQ's contentts contains LRC metadata, placeholders, and may omit
+            // lines that have no translation. Clean it before matching times.
+            val translationLane = translationLrc?.let {
+                normalizeTranslation(normalized.lyric, it)
+            }
+            normalized.copy(translation = translationLane)
         } catch (e: Exception) {
             Log.e(TAG, "[QQMusic] API error: ${e.message}")
             null
         }
+    }
+
+    /**
+     * QQ's translation payload is not a one-to-one lyric lane. It can contain
+     * [ti]/[ar]/[al] metadata, copyright notices, blank timed lines, and "//"
+     * placeholders. Match the remaining translation lines monotonically to
+     * the primary line timestamps instead of relying on equal line counts.
+     */
+    private fun normalizeTranslation(original: String, rawTranslation: String): String? {
+        val originalLines = parseQqTimedLines(original, filterTranslationNoise = false)
+        val translationLines = parseQqTimedLines(rawTranslation, filterTranslationNoise = true)
+        if (translationLines.isEmpty()) {
+            return LyricNormalizer.normalize(rawTranslation)?.preferredLane()
+        }
+        if (originalLines.isEmpty()) {
+            return translationLines.joinToString("\n") { it.content }
+        }
+
+        val output = ArrayList<String>(translationLines.size)
+        var originalCursor = 0
+        for (translationLine in translationLines) {
+            val candidate = originalLines.asSequence()
+                .withIndex()
+                .dropWhile { it.index < originalCursor }
+                .minByOrNull { indexed ->
+                    abs(indexed.value.timeMs - translationLine.timeMs)
+                }
+                ?: run {
+                    Log.w(TAG, "[QQMusic] Translation has more lines than primary lyric")
+                    return translationLines.joinToString("\n") { it.content }
+                }
+
+            val deltaMs = abs(candidate.value.timeMs - translationLine.timeMs)
+            if (deltaMs > MAX_TRANSLATION_MATCH_DELTA_MS) {
+                Log.w(
+                    TAG,
+                    "[QQMusic] Translation timestamp match is unreliable: " +
+                        "translation=${translationLine.timeMs}, " +
+                        "primary=${candidate.value.timeMs}, delta=$deltaMs"
+                )
+                return translationLines.joinToString("\n") { it.content }
+            }
+
+            output += translationLine.content.replaceRange(
+                translationLine.timeRange,
+                formatQqTimestamp(candidate.value.timeMs)
+            )
+            originalCursor = candidate.index + 1
+        }
+
+        Log.i(
+            TAG,
+            "[QQMusic] Normalized translation lines: " +
+                "source=${parseQqTimedLines(rawTranslation, false).size}, " +
+                "kept=${translationLines.size}"
+        )
+        return output.joinToString("\n").takeIf { it.isNotBlank() }
+    }
+
+    private data class QqTimedLine(
+        val content: String,
+        val timeRange: IntRange,
+        val timeMs: Long
+    )
+
+    private val QQ_LRC_TIME_PATTERN = Regex(
+        """\[(\d{1,3}):(\d{2})(?:\.(\d{1,3}))?]"""
+    )
+    private val QQ_METADATA_LINE_PATTERN = Regex("""^\s*\[[A-Za-z][^]]*]""")
+    private const val MAX_TRANSLATION_MATCH_DELTA_MS = 1_000L
+
+    private fun parseQqTimedLines(
+        content: String,
+        filterTranslationNoise: Boolean
+    ): List<QqTimedLine> = content.lines().mapNotNull { rawLine ->
+        val line = rawLine.trim()
+        if (line.isBlank()) return@mapNotNull null
+        if (filterTranslationNoise && QQ_METADATA_LINE_PATTERN.containsMatchIn(line)) {
+            return@mapNotNull null
+        }
+
+        val timeTag = QQ_LRC_TIME_PATTERN.find(line) ?: return@mapNotNull null
+        val text = line.substring(timeTag.range.last + 1).trim()
+        if (filterTranslationNoise && shouldDropTranslationLine(text)) {
+            return@mapNotNull null
+        }
+
+        val fraction = timeTag.groupValues[3]
+        val fractionMs = when (fraction.length) {
+            0 -> 0L
+            1 -> fraction.toLongOrNull()?.times(100L)
+            2 -> fraction.toLongOrNull()?.times(10L)
+            3 -> fraction.toLongOrNull()
+            else -> null
+        } ?: return@mapNotNull null
+        val minutes = timeTag.groupValues[1].toLongOrNull()
+            ?: return@mapNotNull null
+        val seconds = timeTag.groupValues[2].toLongOrNull()
+            ?: return@mapNotNull null
+
+        QqTimedLine(
+            content = line,
+            timeRange = timeTag.range,
+            timeMs = minutes * 60_000L + seconds * 1_000L + fractionMs
+        )
+    }
+
+    private fun shouldDropTranslationLine(text: String): Boolean {
+        if (text.isBlank() || text.contains("本翻译作品的著作权")) return true
+        val compact = text.filterNot(Char::isWhitespace)
+            .replace('／', '/')
+            .replace('＼', '\\')
+        return compact.isNotEmpty() && compact.all { it == '/' || it == '\\' }
+    }
+
+    private fun formatQqTimestamp(timeMs: Long): String {
+        val totalSeconds = timeMs / 1_000L
+        val minutes = totalSeconds / 60L
+        val seconds = totalSeconds % 60L
+        val millis = timeMs % 1_000L
+        return String.format(Locale.ROOT, "[%02d:%02d.%03d]", minutes, seconds, millis)
     }
 
     private fun downloadRaw(musicId: String): String {
