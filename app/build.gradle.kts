@@ -6,6 +6,7 @@ plugins {
 }
 
 val buildTimestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmm"))
+val gitCommitCountVersionCode = rootProject.extra["gitCommitCountVersionCode"] as Int
 
 android {
     namespace = "com.lidesheng.lyricinfo"
@@ -15,7 +16,7 @@ android {
     defaultConfig {
         minSdk = 29
         targetSdk = 37
-        versionCode = 7
+        versionCode = gitCommitCountVersionCode
         versionName = buildTimestamp
 
         ndk {

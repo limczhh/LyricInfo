@@ -6,6 +6,7 @@ plugins {
 }
 
 val buildTimestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmm"))
+val gitCommitCountVersionCode = rootProject.extra["gitCommitCountVersionCode"] as Int
 
 android {
     namespace = "com.mediasession.metadata.debug"
@@ -16,7 +17,7 @@ android {
         applicationId = "com.mediasession.metadata.debug"
         minSdk = 29
         targetSdk = 37
-        versionCode = 1
+        versionCode = gitCommitCountVersionCode
         versionName = buildTimestamp
     }
 
