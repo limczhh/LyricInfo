@@ -192,8 +192,9 @@ object LyricNormalizer {
                 val text = body.substring(0, firstTagStart)
                 if (text.isNotBlank()) {
                     val offsetMs = tagMatches[0].groupValues[1].toLongOrNull() ?: 0
-                    elrcLine.append(formatElrcTime(offsetMs)).append(text)
+                    elrcLine.append(formatElrcTime(offsetMs))
                 }
+                elrcLine.append(text)
             }
 
             // Text after each tag uses next tag's offset (or last tag's for trailing)
@@ -201,10 +202,12 @@ object LyricNormalizer {
                 val textStart = tagMatches[i].range.last + 1
                 val textEnd = tagMatches[i + 1].range.first
                 val text = body.substring(textStart, textEnd)
+                // Preserve separators without creating a standalone timed word.
                 if (text.isNotBlank()) {
                     val offsetMs = tagMatches[i + 1].groupValues[1].toLongOrNull() ?: continue
-                    elrcLine.append(formatElrcTime(offsetMs)).append(text)
+                    elrcLine.append(formatElrcTime(offsetMs))
                 }
+                elrcLine.append(text)
             }
 
             // Text after last tag
@@ -212,8 +215,9 @@ object LyricNormalizer {
             val trailing = body.substring(lastEnd)
             if (trailing.isNotBlank()) {
                 val lastOffsetMs = tagMatches.last().groupValues[1].toLongOrNull() ?: 0
-                elrcLine.append(formatElrcTime(lastOffsetMs)).append(trailing)
+                elrcLine.append(formatElrcTime(lastOffsetMs))
             }
+            elrcLine.append(trailing)
 
             val result = elrcLine.toString()
             Log.i("LyricNormalizer", "qrc result: $result")
@@ -255,6 +259,9 @@ object LyricNormalizer {
             if (leadingText.isNotBlank()) {
                 // Keep the line time tag for leading text
                 elrcLine.append(lineTimeTag.replace("[", "<").replace("]", ">")).append(leadingText)
+            } else {
+                // Preserve a separator without making it a timed word of its own.
+                elrcLine.append(leadingText)
             }
 
             for (i in tags.indices) {
@@ -264,8 +271,9 @@ object LyricNormalizer {
                 val textEnd = if (i + 1 < tags.size) tags[i + 1].range.first else body.length
                 val text = body.substring(textStart, textEnd)
                 if (text.isNotBlank()) {
-                    elrcLine.append(elrcTag).append(text)
+                    elrcLine.append(elrcTag)
                 }
+                elrcLine.append(text)
             }
 
             outputLines.add(elrcLine.toString())
