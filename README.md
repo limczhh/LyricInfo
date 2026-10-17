@@ -17,6 +17,7 @@ LyricInfo 是一个基于 libxposed API 102 的 Xposed/LSPosed 模块。它将�
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
+| `songMid` | `string` | QQ 音乐 songmid |
 | `album` | `string` | 专辑 |
 | `rawLyric` | `string` | 增强逐字时间轴或其他格式 |
 | `translation` | `string` | 独立翻译歌词 |
@@ -37,6 +38,7 @@ LyricInfo 是一个基于 libxposed API 102 的 Xposed/LSPosed 模块。它将�
   "artist": "歌手",
   "lyric": "[00:10.000]原文歌词",
   "songId": "12345",
+  "songMid": "001Qu4I30eVFYb",
   "album": "专辑名",
   "rawLyric": "[00:10.000]<00:10.000>原文歌词",
   "translation": "[00:10.000]翻译歌词",

@@ -9,7 +9,8 @@ data class LyricCacheEntry(
     val songName: String = "",
     val artist: String = "",
     val album: String = "",
-    val songId: String = ""
+    val songId: String = "",
+    val songMid: String = ""
 )
 
 internal class LyricFileCache(private val cacheDir: File) {
@@ -34,7 +35,8 @@ internal class LyricFileCache(private val cacheDir: File) {
                 songName = songName,
                 artist = artist,
                 album = json.optString("album", ""),
-                songId = json.optString("songId", "")
+                songId = json.optString("songId", ""),
+                songMid = json.optString("songMid", "")
             )
         } catch (e: Exception) {
             Log.w(TAG, "[FileCache] Read failed: $songKey", e)
@@ -52,6 +54,7 @@ internal class LyricFileCache(private val cacheDir: File) {
                 .put("lyric", entry.result.lyric)
                 .apply {
                     putOptional("songId", entry.songId)
+                    putOptional("songMid", entry.songMid)
                     putOptional("album", entry.album)
                     putOptional("rawLyric", entry.result.rawLyric)
                     putOptional("translation", entry.result.translation)
@@ -75,6 +78,6 @@ internal class LyricFileCache(private val cacheDir: File) {
     companion object {
         private const val TAG = "LyricInfo"
         private const val CACHE_VERSION_KEY = "cacheVersion"
-        private const val CACHE_VERSION = 3
+        private const val CACHE_VERSION = 4
     }
 }

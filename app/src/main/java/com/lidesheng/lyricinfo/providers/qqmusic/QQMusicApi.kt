@@ -28,7 +28,8 @@ internal object QQMusicApi {
         val songId: String,
         val songName: String,
         val artist: String,
-        val album: String
+        val album: String,
+        val songMid: String = ""
     )
 
     /**
@@ -78,7 +79,8 @@ internal object QQMusicApi {
                 songId = responseId.toString(),
                 songName = songName,
                 artist = singerNames,
-                album = album
+                album = album,
+                songMid = song.optString("mid").trim()
             )
         } catch (e: Exception) {
             Log.e(TAG, "[QQMusic] Metadata API error: ${e.message}")

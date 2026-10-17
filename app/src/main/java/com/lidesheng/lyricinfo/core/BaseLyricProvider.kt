@@ -19,7 +19,8 @@ abstract class BaseLyricProvider : LyricProvider {
         val artist: String,
         val album: String,
         val songId: String,
-        val cacheKey: String = songId
+        val cacheKey: String = songId,
+        val songMid: String = ""
     )
 
     companion object {
@@ -68,7 +69,8 @@ abstract class BaseLyricProvider : LyricProvider {
             songName = track.songName,
             artist = track.artist,
             album = track.album,
-            songId = track.songId
+            songId = track.songId,
+            songMid = track.songMid
         )
         lyricCache[track.cacheKey] = result
         cachedEntries[track.cacheKey] = entry
@@ -179,7 +181,8 @@ abstract class BaseLyricProvider : LyricProvider {
             artist = track.artist,
             songId = track.songId,
             album = track.album,
-            result = result
+            result = result,
+            songMid = track.songMid
         ) ?: run {
             bundle.remove(LYRIC_INFO_KEY)
             Log.w(TAG, "[Inject] skipped invalid lyric result$logSuffix")

@@ -71,7 +71,8 @@ class QQMusicProvider : BaseLyricProvider() {
                 songName = cached.songName,
                 artist = cached.artist,
                 album = cached.album,
-                songId = songId
+                songId = songId,
+                songMid = cached.songMid
             )
         }
         requestSongMetadata(songId)
@@ -111,7 +112,8 @@ class QQMusicProvider : BaseLyricProvider() {
                     songName = metadata.songName,
                     artist = metadata.artist,
                     album = metadata.album,
-                    songId = metadata.songId
+                    songId = metadata.songId,
+                    songMid = metadata.songMid
                 )
                 metadataCache[songId] = track
                 Log.i(TAG, "[QQMusic] [Song] ${track.songName} - ${track.artist}")
