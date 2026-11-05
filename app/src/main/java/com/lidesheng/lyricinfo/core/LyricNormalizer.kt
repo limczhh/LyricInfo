@@ -1,5 +1,6 @@
 package com.lidesheng.lyricinfo.core
 
+import org.json.JSONObject
 import java.util.Locale
 
 /**
@@ -28,33 +29,111 @@ object LyricNormalizer {
     private val LRC_TIME_TAG = Regex("""\[\d{1,3}:\d{2}(?:\.\d{1,3})?]""")
     private val METADATA_TAG_LINE = Regex("""^\[[A-Za-z][A-Za-z0-9_-]*:.*]$""")
 
+    // Non-standard colon-separated millisecond timestamps: [mm:ss:xx] and <mm:ss:xx>
+    private val NON_STANDARD_LRC_TIMESTAMP = Regex("""\[(\d{1,3}):(\d{2}):(\d{2,3})]""")
+    private val NON_STANDARD_ELRC_TIMESTAMP = Regex("""<(\d{1,3}):(\d{2}):(\d{2,3})>""")
+
+    private val AUTHOR_KEYWORDS = listOf(
+        "作词", "作曲", "编曲", "词", "曲", "制作", "原唱", "演唱",
+        "混音", "母带", "录音", "吉他", "贝斯", "鼓", "键盘", "和声", "和音",
+        "监制", "企划", "文案", "统筹", "出品", "发行",
+        "written", "composer", "composed", "arranger", "arranged",
+        "producer", "produced", "lyrics", "lyricist", "music",
+        "vocal", "guitar", "bass", "drum", "mixing", "mastering"
+    )
+
+    /**
+     * Normalizes non-standard colon-separated millisecond timestamps to standard dot-separated ones:
+     * - [mm:ss:xx] or [mm:ss:xxx] -> [$1:$2.$3]
+     * - <mm:ss:xx> or <mm:ss:xxx> -> <$1:$2.$3>
+     */
+    fun normalizeTimestamps(content: String): String {
+        val lrcNormalized = NON_STANDARD_LRC_TIMESTAMP.replace(content, "[$1:$2.$3]")
+        return NON_STANDARD_ELRC_TIMESTAMP.replace(lrcNormalized, "<$1:$2.$3>")
+    }
+
+    private fun isAuthorInfo(text: String): Boolean {
+        val lower = text.lowercase(Locale.ROOT)
+        return AUTHOR_KEYWORDS.any { lower.contains(it) }
+    }
+
+    /**
+     * Inspects a line. If it is a Netease-style raw JSON fragment (starts with {"t": or {"c":):
+     * - If it contains author/credit info, converts it into standard "[00:00.00]Author Info".
+     * - Otherwise, returns null to discard the noise line.
+     * For normal lines, returns the line as-is.
+     */
+    private fun cleanJsonLine(line: String): String? {
+        val trimmed = line.trim()
+        if (!trimmed.startsWith("{\"t\":") && !trimmed.startsWith("{\"c\":")) {
+            return line
+        }
+        return try {
+            val json = JSONObject(trimmed)
+            val cArray = json.optJSONArray("c")
+            val text = buildString {
+                if (cArray != null) {
+                    for (i in 0 until cArray.length()) {
+                        val item = cArray.optJSONObject(i)
+                        if (item != null) {
+                            append(item.optString("tx", ""))
+                        } else {
+                            append(cArray.optString(i, ""))
+                        }
+                    }
+                }
+            }.trim()
+
+            if (text.isNotBlank() && isAuthorInfo(text)) {
+                "[00:00.00]$text"
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    fun cleanJsonLines(content: String): String {
+        return content.lineSequence()
+            .mapNotNull { cleanJsonLine(it) }
+            .joinToString("\n")
+    }
+
+    fun cleanRawLyric(raw: String): String {
+        val unbom = raw.trim().removePrefix("\uFEFF")
+        val jsonCleaned = cleanJsonLines(unbom)
+        return normalizeTimestamps(jsonCleaned).trim()
+    }
+
     fun normalize(raw: String): LyricResult? {
         if (raw.isBlank()) return null
-        val trimmed = raw.trim().removePrefix("\uFEFF")
+        val cleaned = cleanRawLyric(raw)
+        if (cleaned.isBlank()) return null
 
         // YRC must be checked before QRC: both share [ms,ms] prefix,
         // but YRC word-tags (offset,dur,flags) also match QRC's (offset,dur) pattern.
-        if (isYrc(trimmed)) {
-            val elrc = yrcToElrc(trimmed) ?: return null
-            return fromEnhanced(preservePrefixMetadata(trimmed, elrc))
+        if (isYrc(cleaned)) {
+            val elrc = yrcToElrc(cleaned) ?: return null
+            return fromEnhanced(preservePrefixMetadata(cleaned, elrc))
         }
 
-        if (isQrc(trimmed)) {
-            val elrc = qrcToElrc(trimmed) ?: return null
-            return fromEnhanced(preservePrefixMetadata(trimmed, elrc))
+        if (isQrc(cleaned)) {
+            val elrc = qrcToElrc(cleaned) ?: return null
+            return fromEnhanced(preservePrefixMetadata(cleaned, elrc))
         }
 
         // Word-level LRC: [mm:ss.xxx]word[mm:ss.xxx]word...
-        if (isWordLrc(trimmed)) {
-            val elrc = wordLrcToElrc(trimmed) ?: return null
-            return fromEnhanced(preservePrefixMetadata(trimmed, elrc))
+        if (isWordLrc(cleaned)) {
+            val elrc = wordLrcToElrc(cleaned) ?: return null
+            return fromEnhanced(preservePrefixMetadata(cleaned, elrc))
         }
 
-        if (isElrc(trimmed)) {
-            return fromEnhanced(trimmed)
+        if (isElrc(cleaned)) {
+            return fromEnhanced(cleaned)
         }
 
-        return LyricResult(lyric = trimmed)
+        return LyricResult(lyric = cleaned)
     }
 
     private fun fromEnhanced(enhanced: String): LyricResult? {
@@ -104,7 +183,9 @@ object LyricNormalizer {
         for (rawLine in content.lineSequence()) {
             val line = rawLine.trim().removePrefix("\uFEFF")
             if (line.isBlank()) continue
-            if (!METADATA_TAG_LINE.matches(line)) break
+            val isMetaTag = METADATA_TAG_LINE.matches(line)
+            val isZeroAuthor = line.startsWith("[00:00.00]") && isAuthorInfo(line)
+            if (!isMetaTag && !isZeroAuthor) break
             result += line
         }
         return result

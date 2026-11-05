@@ -1,5 +1,6 @@
 package com.lidesheng.lyricinfo.providers.miuiplayer
 
+import android.annotation.SuppressLint
 import android.media.MediaMetadata
 import android.os.Bundle
 import android.util.Log
@@ -13,9 +14,11 @@ import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
 import java.io.File
 import java.lang.reflect.Method
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 
+@SuppressLint("SoonBlockedPrivateApi")
 class MiuiPlayerProvider : LyricProvider {
 
     companion object {
@@ -379,7 +382,7 @@ class MiuiPlayerProvider : LyricProvider {
         val minutes = ms / 60000
         val seconds = (ms % 60000) / 1000
         val millis = ms % 1000
-        return String.format("%02d:%02d.%03d", minutes, seconds, millis)
+        return String.format(Locale.ROOT, "%02d:%02d.%03d", minutes, seconds, millis)
     }
 
     private fun hookMediaMetadataBuilder(module: XposedModule, classLoader: ClassLoader) {

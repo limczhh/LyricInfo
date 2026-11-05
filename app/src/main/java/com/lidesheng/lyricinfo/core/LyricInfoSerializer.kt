@@ -15,7 +15,7 @@ internal object LyricInfoSerializer {
     ): String? {
         val validSongName = songName?.trim()?.takeIf { it.isNotBlank() } ?: return null
         val validArtist = artist?.trim()?.takeIf { it.isNotBlank() } ?: return null
-        val validLyric = result.lyric.takeIf { it.isNotBlank() } ?: return null
+        val validLyric = LyricNormalizer.cleanRawLyric(result.lyric).takeIf { it.isNotBlank() } ?: return null
 
         return JSONObject().apply {
             put("songName", validSongName)
@@ -24,9 +24,9 @@ internal object LyricInfoSerializer {
             putOptional("songId", songId)
             putOptional("songMid", songMid)
             putOptional("album", album)
-            putOptional("rawLyric", result.rawLyric)
-            putOptional("translation", result.translation)
-            putOptional("roma", result.roma)
+            putOptional("rawLyric", result.rawLyric?.let(LyricNormalizer::cleanRawLyric))
+            putOptional("translation", result.translation?.let(LyricNormalizer::cleanRawLyric))
+            putOptional("roma", result.roma?.let(LyricNormalizer::cleanRawLyric))
         }.toString()
     }
 

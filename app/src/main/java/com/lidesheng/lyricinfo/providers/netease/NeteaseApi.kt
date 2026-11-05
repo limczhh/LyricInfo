@@ -98,18 +98,13 @@ internal object NeteaseApi {
             val romalrcRaw = json.optJSONObject("romalrc")?.optString("lyric")
 
             val lrc = lrcRaw?.takeIf { it.isNotBlank() }
+            val yrc = yrcRaw?.takeIf { it.isNotBlank() }
             val translation = tlyricRaw?.takeIf { it.isNotBlank() }
 
-            // yrc 是混合格式：前几行是 JSON（元数据），后面是真正的逐字格式 [ms,dur](ms,dur,text)text
-            // 过滤掉 JSON 行，保留逐字格式行
-            val yrcFiltered = yrcRaw?.takeIf { it.isNotBlank() }?.let { filterYrcLines(it) }
-
-            // 优先尝试转换 YRC（逐字歌词）到 elrc 格式，其次转换标准 LRC
-            val normalized = when {
-                yrcFiltered != null -> LyricNormalizer.normalize(yrcFiltered)
-                lrc != null -> LyricNormalizer.normalize(lrc)
-                else -> return null
-            } ?: return null
+            // 优先尝试转换 YRC（逐字歌词）到 elrc 格式，转换失败或无 YRC 时 fallback 到标准 LRC
+            val normalized = (if (yrc != null) LyricNormalizer.normalize(yrc) else null)
+                ?: (if (lrc != null) LyricNormalizer.normalize(lrc) else null)
+                ?: return null
 
             // Keep translation as an independent lane. It may itself be enhanced LRC.
             val transNormalized = translation?.let { LyricNormalizer.normalize(it) }
@@ -152,16 +147,29 @@ internal object NeteaseApi {
             return translation
         }
 
-        if (originalLines.size != translationLines.size) {
+        // If the original lyric has leading 00:00 credit lines while translation does not,
+        // match translation against effective timed lyric lines.
+        val effectiveOriginalLines = if (originalLines.size > translationLines.size) {
+            val prefixAuthorCount = originalLines.indexOfFirst { it.timeMs > 0L }
+            if (prefixAuthorCount > 0 && (originalLines.size - prefixAuthorCount == translationLines.size)) {
+                originalLines.drop(prefixAuthorCount)
+            } else {
+                originalLines
+            }
+        } else {
+            originalLines
+        }
+
+        if (effectiveOriginalLines.size != translationLines.size) {
             Log.w(
                 TAG,
                 "[Netease] Keep translation timestamps: line count mismatch " +
-                    "(original=${originalLines.size}, translation=${translationLines.size})"
+                    "(original=${effectiveOriginalLines.size}, translation=${translationLines.size})"
             )
             return translation
         }
 
-        if (!isNonDecreasing(originalLines) || !isNonDecreasing(translationLines)) {
+        if (!isNonDecreasing(effectiveOriginalLines) || !isNonDecreasing(translationLines)) {
             Log.w(TAG, "[Netease] Keep translation timestamps: invalid time order")
             return translation
         }
@@ -169,7 +177,7 @@ internal object NeteaseApi {
         val outputLines = translation.lines().toMutableList()
         var changed = 0
         translationLines.forEachIndexed { index, translationLine ->
-            val targetTimeMs = originalLines[index].timeMs
+            val targetTimeMs = effectiveOriginalLines[index].timeMs
             if (translationLine.timeMs == targetTimeMs) return@forEachIndexed
 
             val line = outputLines[translationLine.lineIndex]
@@ -185,7 +193,7 @@ internal object NeteaseApi {
             Log.i(
                 TAG,
                 "[Netease] Aligned translation timestamps by line order: " +
-                    "lines=${originalLines.size}, changed=$changed"
+                    "lines=${effectiveOriginalLines.size}, changed=$changed"
             )
             return outputLines.joinToString("\n")
         }
@@ -199,7 +207,7 @@ internal object NeteaseApi {
         val timeMs: Long
     )
 
-    private val LRC_LINE_TIME_PATTERN = Regex("""\[(\d{2}):(\d{2})\.(\d{2,3})]""")
+    private val LRC_LINE_TIME_PATTERN = Regex("""\[(\d{1,3}):(\d{2})\.(\d{2,3})]""")
 
     private fun parseTimedLines(content: String): List<TimedLine> =
         content.lines().mapIndexedNotNull { lineIndex, line ->
@@ -225,20 +233,6 @@ internal object NeteaseApi {
         val seconds = totalSeconds % 60L
         val millis = timeMs % 1_000L
         return String.format(Locale.ROOT, "[%02d:%02d.%03d]", minutes, seconds, millis)
-    }
-
-    /**
-     * 过滤 yrc 内容：跳过 JSON 行（元数据），保留逐字格式行。
-     * 网易云 yrc 返回混合格式：
-     * - JSON 行：{"t":0,"c":[{"tx":"作词: "},{"tx":"Taylor Swift"}]}
-     * - 逐字行：[16440,3640](0,480,0)窗(480,420,0)外...
-     */
-    private fun filterYrcLines(yrc: String): String? {
-        val filtered = yrc.lines().filter { line ->
-            val trimmed = line.trim()
-            trimmed.isNotBlank() && !trimmed.startsWith("{")
-        }
-        return filtered.takeIf { it.isNotEmpty() }?.joinToString("\n")
     }
 
     private fun request(endpoint: String, jsonParams: String): String {
