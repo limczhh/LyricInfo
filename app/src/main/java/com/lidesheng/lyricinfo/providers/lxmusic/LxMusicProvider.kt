@@ -7,7 +7,7 @@ import android.util.Log
 import android.util.LruCache
 import com.lidesheng.lyricinfo.core.LyricNormalizer
 import com.lidesheng.lyricinfo.core.LyricProvider
-import com.lidesheng.lyricinfo.core.LyricResult
+import com.lidesheng.lyricinfo.core.PreparedLyric
 import com.lidesheng.lyricinfo.core.LyricInfoSerializer
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
@@ -46,10 +46,10 @@ open class LxMusicProvider(
 
     private data class CapturedLyric(
         val songKey: String?,
-        val result: LyricResult
+        val result: PreparedLyric
     )
 
-    private val lyricCache = LruCache<String, LyricResult>(MAX_LYRIC_CACHE_ENTRIES)
+    private val lyricCache = LruCache<String, PreparedLyric>(MAX_LYRIC_CACHE_ENTRIES)
     private val lastCapturedLyric = AtomicReference<CapturedLyric?>(null)
     private val hookHandles = mutableListOf<XposedInterface.HookHandle>()
     private var lastMediaSession: Any? = null
@@ -121,7 +121,7 @@ open class LxMusicProvider(
                 result = normalized.copy(
                     translation = transNormalized?.preferredLane(),
                     roma = romaNormalized?.preferredLane()
-                )
+                ).prepare()
             )
         )
         refreshMediaSession()

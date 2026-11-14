@@ -116,14 +116,6 @@ class QishuiProvider : BaseLyricProvider() {
             )
     }
 
-    override fun requestLyric(track: TrackMetadata, logSuffix: String) {
-        // Prime Qishui's own cache synchronously so the current metadata event can inject.
-        if (!lyricCache.containsKey(track.cacheKey)) {
-            readCachedLyric(track.songId)?.let { storeCachedLyric(track, it) }
-        }
-        super.requestLyric(track, logSuffix)
-    }
-
     override fun fetchLyric(mediaId: String, title: String?, artist: String?): LyricResult? {
         return readCachedLyric(mediaId)
     }
@@ -387,15 +379,15 @@ class QishuiProvider : BaseLyricProvider() {
             metadataCache.putIfAbsent(track.songId, track)
         }
         val changed = previous != track
-        val lyricChanged = lyric != null && lyricCache[track.songId] != lyric
+        val lyricChanged = lyric != null && lyricCache[track.songId]?.source != lyric
         if (lyric != null && lyricChanged) {
             // Prefer the complete lyric already held by Qishui over its disk cache.
-            lyricCache[track.songId] = lyric
+            lyricCache[track.songId] = lyric.prepare()
         }
 
         val currentTrack = metadataCache[track.songId] ?: track
         if (lyric == null && lyricCache[track.songId] == null) {
-            // This also primes the local KRC cache and keeps the request keyed
+            // This loads the local KRC cache asynchronously and keeps the request keyed
             // to the same trusted media ID.
             requestLyric(currentTrack, " (track)")
         }

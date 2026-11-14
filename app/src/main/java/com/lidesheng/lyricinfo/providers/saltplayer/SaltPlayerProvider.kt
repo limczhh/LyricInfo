@@ -10,7 +10,7 @@ import com.lidesheng.lyricinfo.core.LyricCacheEntry
 import com.lidesheng.lyricinfo.core.LyricFileCache
 import com.lidesheng.lyricinfo.core.LyricInfoSerializer
 import com.lidesheng.lyricinfo.core.LyricProvider
-import com.lidesheng.lyricinfo.core.LyricResult
+import com.lidesheng.lyricinfo.core.PreparedLyric
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
@@ -31,7 +31,7 @@ class SaltPlayerProvider : LyricProvider {
 
     private data class CapturedLyric(
         val songId: String?,
-        val result: LyricResult,
+        val result: PreparedLyric,
         val capturedAt: Long
     )
 
@@ -50,7 +50,7 @@ class SaltPlayerProvider : LyricProvider {
 
     override val packageName = PACKAGE_NAME
 
-    private val lyricCache = ConcurrentHashMap<String, LyricResult>()
+    private val lyricCache = ConcurrentHashMap<String, PreparedLyric>()
     private val lastCapturedLyric = AtomicReference<CapturedLyric?>(null)
     private val currentSong = AtomicReference<SaltTrackIdentity?>(null)
     private val mediaSessions = SaltMediaSessionRegistry()
@@ -148,7 +148,7 @@ class SaltPlayerProvider : LyricProvider {
                 lastCapturedLyric.set(
                     CapturedLyric(
                         currentSong.get()?.id,
-                        normalized,
+                        normalized.prepare(),
                         SystemClock.uptimeMillis()
                     )
                 )
@@ -290,7 +290,7 @@ class SaltPlayerProvider : LyricProvider {
         lastCapturedLyric.set(
             CapturedLyric(
                 songId = songId,
-                result = normalized,
+                result = normalized.prepare(),
                 capturedAt = capturedAt
             )
         )
@@ -387,7 +387,7 @@ class SaltPlayerProvider : LyricProvider {
                 lastCapturedLyric.set(
                     CapturedLyric(
                         currentSong.get()?.id,
-                        normalized,
+                        normalized.prepare(),
                         SystemClock.uptimeMillis()
                     )
                 )

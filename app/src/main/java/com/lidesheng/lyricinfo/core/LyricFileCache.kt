@@ -5,7 +5,7 @@ import org.json.JSONObject
 import java.io.File
 
 data class LyricCacheEntry(
-    val result: LyricResult,
+    val result: PreparedLyric,
     val songName: String = "",
     val artist: String = "",
     val album: String = "",
@@ -22,18 +22,25 @@ internal class LyricFileCache(private val cacheDir: File) {
             val json = JSONObject(file.readText())
             if (json.optInt(CACHE_VERSION_KEY, -1) != CACHE_VERSION) return null
 
-            val lyric = json.optString("lyric", "").takeIf { it.isNotBlank() } ?: return null
+            val source = json.optJSONObject("source") ?: return null
+            val prepared = json.optJSONObject("prepared") ?: return null
+            val sourceLyric = source.optString("lyric", "").takeIf { it.isNotBlank() } ?: return null
+            val lyric = prepared.optString("lyric", "").takeIf { it.isNotBlank() } ?: return null
             val songName = json.optString("songName", "").trim().takeIf { it.isNotBlank() } ?: return null
             val artist = json.optString("artist", "").trim().takeIf { it.isNotBlank() } ?: return null
             LyricCacheEntry(
-                result = LyricResult(
-                    lyric = LyricNormalizer.cleanRawLyric(lyric),
-                    rawLyric = json.optString("rawLyric", "").takeIf { it.isNotBlank() }
-                        ?.let(LyricNormalizer::cleanRawLyric),
-                    translation = json.optString("translation", "").takeIf { it.isNotBlank() }
-                        ?.let(LyricNormalizer::cleanRawLyric),
-                    roma = json.optString("roma", "").takeIf { it.isNotBlank() }
-                        ?.let(LyricNormalizer::cleanRawLyric)
+                result = PreparedLyric(
+                    source = LyricResult(
+                        lyric = sourceLyric,
+                        rawLyric = source.optionalString("rawLyric"),
+                        translation = source.optionalString("translation"),
+                        roma = source.optionalString("roma"),
+                        referenceLyric = source.optionalString("referenceLyric")
+                    ),
+                    lyric = lyric,
+                    rawLyric = prepared.optionalString("rawLyric"),
+                    translation = prepared.optionalString("translation"),
+                    roma = prepared.optionalString("roma")
                 ),
                 songName = songName,
                 artist = artist,
@@ -50,24 +57,28 @@ internal class LyricFileCache(private val cacheDir: File) {
     fun write(songKey: String, entry: LyricCacheEntry) {
         try {
             if (!cacheDir.exists()) cacheDir.mkdirs()
-            val cleanResult = LyricResult(
-                lyric = LyricNormalizer.cleanRawLyric(entry.result.lyric),
-                rawLyric = entry.result.rawLyric?.let(LyricNormalizer::cleanRawLyric),
-                translation = entry.result.translation?.let(LyricNormalizer::cleanRawLyric),
-                roma = entry.result.roma?.let(LyricNormalizer::cleanRawLyric)
-            )
+            val source = entry.result.source
             val json = JSONObject()
                 .put(CACHE_VERSION_KEY, CACHE_VERSION)
                 .put("songName", entry.songName)
                 .put("artist", entry.artist)
-                .put("lyric", cleanResult.lyric)
+                .put("source", JSONObject().apply {
+                    put("lyric", source.lyric)
+                    putOptional("rawLyric", source.rawLyric)
+                    putOptional("translation", source.translation)
+                    putOptional("roma", source.roma)
+                    putOptional("referenceLyric", source.referenceLyric)
+                })
+                .put("prepared", JSONObject().apply {
+                    put("lyric", entry.result.lyric)
+                    putOptional("rawLyric", entry.result.rawLyric)
+                    putOptional("translation", entry.result.translation)
+                    putOptional("roma", entry.result.roma)
+                })
                 .apply {
                     putOptional("songId", entry.songId)
                     putOptional("songMid", entry.songMid)
                     putOptional("album", entry.album)
-                    putOptional("rawLyric", cleanResult.rawLyric)
-                    putOptional("translation", cleanResult.translation)
-                    putOptional("roma", cleanResult.roma)
                 }
                 .toString()
             cacheFile(songKey).writeText(json)
@@ -81,12 +92,15 @@ internal class LyricFileCache(private val cacheDir: File) {
     }
 
     private fun JSONObject.putOptional(key: String, value: String?) {
-        value?.trim()?.takeIf { it.isNotBlank() }?.let { put(key, it) }
+        value?.takeIf { it.isNotBlank() }?.let { put(key, it) }
     }
+
+    private fun JSONObject.optionalString(key: String): String? =
+        optString(key, "").takeIf { it.isNotBlank() }
 
     companion object {
         private const val TAG = "LyricInfo"
         private const val CACHE_VERSION_KEY = "cacheVersion"
-        private const val CACHE_VERSION = 5
+        private const val CACHE_VERSION = 7
     }
 }

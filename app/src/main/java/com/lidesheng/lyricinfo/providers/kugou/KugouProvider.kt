@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.util.Log
 import com.lidesheng.lyricinfo.core.BaseLyricProvider
 import com.lidesheng.lyricinfo.core.LyricResult
+import com.lidesheng.lyricinfo.core.PreparedLyric
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
@@ -236,7 +237,7 @@ class KugouProvider : BaseLyricProvider() {
         )
     }
 
-    override fun onLyricAvailable(track: TrackMetadata, result: LyricResult) {
+    override fun onLyricAvailable(track: TrackMetadata, result: PreparedLyric) {
         apiMetadataCache[track.cacheKey]?.let { metadata ->
             storeCachedLyric(
                 track.copy(

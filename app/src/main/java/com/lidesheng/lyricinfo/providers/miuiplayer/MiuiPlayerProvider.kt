@@ -9,6 +9,7 @@ import com.lidesheng.lyricinfo.core.LyricFileCache
 import com.lidesheng.lyricinfo.core.LyricInfoSerializer
 import com.lidesheng.lyricinfo.core.LyricProvider
 import com.lidesheng.lyricinfo.core.LyricResult
+import com.lidesheng.lyricinfo.core.PreparedLyric
 import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.PackageLoadedParam
@@ -46,7 +47,7 @@ class MiuiPlayerProvider : LyricProvider {
 
     private data class CapturedLyric(
         val metadata: TrackMetadata,
-        val result: LyricResult
+        val result: PreparedLyric
     )
 
     private val lyricCache = ConcurrentHashMap<String, CapturedLyric>()
@@ -123,7 +124,7 @@ class MiuiPlayerProvider : LyricProvider {
                             val lyricResult = buildLyricResult(lyricObj, lyricClass)
                             if (lyricResult != null) {
                                 lastCapturedLyric.set(
-                                    CapturedLyric(track, lyricResult)
+                                    CapturedLyric(track, lyricResult.prepare())
                                 )
                                 Log.d(TAG, "[MiPlayer] ✓ Parsed full ELRC lyrics for: ${track.songName}")
                                 

@@ -36,7 +36,7 @@ abstract class BaseLyricProvider : LyricProvider {
     private val executor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "LyricInfo-${javaClass.simpleName}").apply { isDaemon = true }
     }
-    protected val lyricCache = ConcurrentHashMap<String, LyricResult>()
+    protected val lyricCache = ConcurrentHashMap<String, PreparedLyric>()
     private val cachedEntries = ConcurrentHashMap<String, LyricCacheEntry>()
     private val requestedIds = ConcurrentHashMap.newKeySet<String>()
     private var fileCache: LyricFileCache? = null
@@ -86,7 +86,7 @@ abstract class BaseLyricProvider : LyricProvider {
     }
 
     /** Stores a complete lyric result for current and future offline playback. */
-    protected fun storeCachedLyric(track: TrackMetadata, result: LyricResult) {
+    protected fun storeCachedLyric(track: TrackMetadata, result: PreparedLyric) {
         val entry = LyricCacheEntry(
             result = result,
             songName = track.songName,
@@ -233,7 +233,7 @@ abstract class BaseLyricProvider : LyricProvider {
     protected fun putLyricInfo(
         bundle: Bundle,
         track: TrackMetadata,
-        result: LyricResult,
+        result: PreparedLyric,
         logSuffix: String = ""
     ): Boolean = putSourceResponse(bundle, track, result, logSuffix)
 
@@ -247,7 +247,7 @@ abstract class BaseLyricProvider : LyricProvider {
     private fun putSourceResponse(
         bundle: Bundle,
         track: TrackMetadata,
-        result: LyricResult?,
+        result: PreparedLyric?,
         logSuffix: String
     ): Boolean {
         val json = if (result == null) {
@@ -429,19 +429,19 @@ abstract class BaseLyricProvider : LyricProvider {
      * callback also runs for a disk-cache hit, so a provider can use one path
      * for both synchronous and asynchronous sources.
      */
-    protected open fun onLyricAvailable(track: TrackMetadata, result: LyricResult) {
+    protected open fun onLyricAvailable(track: TrackMetadata, result: PreparedLyric) {
         publishLyricState(track, result)
     }
 
     /** Publishes the provider-owned source state to the retained media targets. */
-    protected fun publishLyricState(track: TrackMetadata, result: LyricResult?) {
+    protected fun publishLyricState(track: TrackMetadata, result: PreparedLyric?) {
         if (!active) return
         refreshFrameworkSession(track, result)
         refreshCompatSession(track, result)
     }
 
     /** Compatibility alias for providers that capture a complete lyric directly. */
-    protected fun publishLyricResult(track: TrackMetadata, result: LyricResult) {
+    protected fun publishLyricResult(track: TrackMetadata, result: PreparedLyric) {
         publishLyricState(track, result)
     }
 
@@ -470,8 +470,9 @@ abstract class BaseLyricProvider : LyricProvider {
                 val result = fetchLyric(mediaId, track.songName, track.artist)
                 if (!active) return@execute
                 if (result != null && result.lyric.isNotBlank()) {
-                    storeCachedLyric(track, result)
-                    onLyricAvailable(track, result)
+                    val prepared = result.prepare()
+                    storeCachedLyric(track, prepared)
+                    onLyricAvailable(track, prepared)
                     Log.d(TAG, "[Fetch] ✓ API: ${track.songName}")
                 } else {
                     onLyricUnavailable(track)
@@ -510,7 +511,7 @@ abstract class BaseLyricProvider : LyricProvider {
 
     private fun isRefreshReentry(): Boolean = refreshIdentity.get() != null
 
-    private fun refreshFrameworkSession(track: TrackMetadata, result: LyricResult?) {
+    private fun refreshFrameworkSession(track: TrackMetadata, result: PreparedLyric?) {
         if (!active) return
         val target = frameworkTarget ?: return
         if (target.cacheKey != track.cacheKey) return
@@ -557,7 +558,7 @@ abstract class BaseLyricProvider : LyricProvider {
         )
     }
 
-    private fun refreshCompatSession(track: TrackMetadata, result: LyricResult?) {
+    private fun refreshCompatSession(track: TrackMetadata, result: PreparedLyric?) {
         if (!active) return
         val target = compatTarget ?: return
         if (target.cacheKey != track.cacheKey) return
