@@ -4,21 +4,27 @@ internal data class SaltTrackIdentity(
     val id: String,
     val title: String,
     val artist: String,
-    val album: String
+    val album: String,
+    val hasStableId: Boolean = true
 )
 
 internal object SaltTrackIdentityPolicy {
     fun isSameTrack(first: SaltTrackIdentity?, second: SaltTrackIdentity?): Boolean {
         if (first == null || second == null) return false
 
-        val titleMatches = first.title.isBlank() || second.title.isBlank() ||
-            sameText(first.title, second.title)
-        val artistMatches = first.artist.isBlank() || second.artist.isBlank() ||
-            sameText(first.artist, second.artist)
-        if (!titleMatches || !artistMatches) return false
+        // Two real media IDs are authoritative. Never fall back to title/artist
+        // when both IDs are present, otherwise same-titled songs can cross-bind.
+        if (first.hasStableId && second.hasStableId) {
+            return first.id == second.id
+        }
+        if (first.id == second.id && first.id.isNotBlank()) return true
 
-        return first.id == second.id ||
-            (first.title.isNotBlank() && second.title.isNotBlank())
+        if (first.title.isBlank() || second.title.isBlank() ||
+            !sameText(first.title, second.title)
+        ) return false
+
+        return first.artist.isBlank() || second.artist.isBlank() ||
+            sameText(first.artist, second.artist)
     }
 
     private fun sameText(first: String, second: String): Boolean =

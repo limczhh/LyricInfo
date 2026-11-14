@@ -25,7 +25,7 @@ class QQMusicProvider : BaseLyricProvider() {
 
     private val qqHookHandles = mutableListOf<XposedInterface.HookHandle>()
     private val metadataCache = ConcurrentHashMap<String, TrackMetadata>()
-    private val metadataFetchingIds = ConcurrentHashMap.newKeySet<String>()
+    private val metadataRequestedIds = ConcurrentHashMap.newKeySet<String>()
     private val missingMediaIdLogged = AtomicBoolean(false)
     private val metadataExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "LyricInfo-QQMusicMetadata").apply { isDaemon = true }
@@ -52,7 +52,7 @@ class QQMusicProvider : BaseLyricProvider() {
         qqHookHandles.clear()
         metadataExecutor.shutdownNow()
         metadataCache.clear()
-        metadataFetchingIds.clear()
+        metadataRequestedIds.clear()
         super.onDestroy()
     }
 
@@ -79,6 +79,18 @@ class QQMusicProvider : BaseLyricProvider() {
         return null
     }
 
+    override fun resolvePendingTrackMetadata(bundle: Bundle): TrackMetadata? {
+        val songId = readMediaId(bundle)
+        if (songId.isBlank()) return null
+        return TrackMetadata(
+            songName = "",
+            artist = "",
+            album = "",
+            songId = songId,
+            cacheKey = songId
+        )
+    }
+
     private fun readMediaId(bundle: Bundle): String {
         val stringId = bundle.getCharSequence(MediaMetadata.METADATA_KEY_MEDIA_ID)
             ?.toString()
@@ -97,12 +109,14 @@ class QQMusicProvider : BaseLyricProvider() {
     }
 
     private fun requestSongMetadata(songId: String) {
-        if (metadataCache.containsKey(songId) || !metadataFetchingIds.add(songId)) return
+        if (metadataCache.containsKey(songId) || !metadataRequestedIds.add(songId)) return
 
         Log.i(TAG, "[QQMusic] Query song metadata: id=$songId")
         metadataExecutor.execute {
             try {
+                if (!isProviderActive()) return@execute
                 val metadata = QQMusicApi.fetchSongMetadata(songId)
+                if (!isProviderActive()) return@execute
                 if (metadata == null) {
                     Log.w(TAG, "[QQMusic] No song metadata: id=$songId")
                     return@execute
@@ -118,10 +132,9 @@ class QQMusicProvider : BaseLyricProvider() {
                 metadataCache[songId] = track
                 Log.i(TAG, "[QQMusic] [Song] ${track.songName} - ${track.artist}")
                 requestLyric(track, " (metadata)")
+                publishLyricState(track, lyricCache[track.cacheKey])
             } catch (e: Exception) {
                 Log.e(TAG, "[QQMusic] ✗ Query song metadata: id=$songId", e)
-            } finally {
-                metadataFetchingIds.remove(songId)
             }
         }
     }
@@ -140,7 +153,8 @@ class QQMusicProvider : BaseLyricProvider() {
             val handle = module.hook(buildMethod).intercept { chain ->
                 try {
                     val bundle = bundleField.get(chain.thisObject) as Bundle
-                    injectLyricInfo(bundle, " (compatBuilder)")
+                    val track = injectLyricInfo(bundle, " (compatBuilder)")
+                    invalidateCompatMetadataTarget(track)
                 } catch (e: Exception) {
                     Log.e(TAG, "[QQMusic] ✗ Inject Compat Builder", e)
                 }
@@ -173,7 +187,13 @@ class QQMusicProvider : BaseLyricProvider() {
                     val metadata = chain.getArg(0)
                     if (metadata != null) {
                         val bundle = bundleField.get(metadata) as Bundle
-                        injectLyricInfo(bundle, " (compatSession)")
+                        observeCompatMetadata(
+                            session = chain.thisObject,
+                            metadata = metadata,
+                            bundle = bundle,
+                            setMetadataMethod = setMetadataMethod,
+                            logSuffix = " (compatSession)"
+                        )
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "[QQMusic] ✗ Inject Compat Session", e)
@@ -182,6 +202,12 @@ class QQMusicProvider : BaseLyricProvider() {
             }
             qqHookHandles.add(handle)
             Log.i(TAG, "[QQMusic] ✓ Hooked MediaSessionCompat.setMetadata()")
+            hookCompatSessionRelease(
+                module,
+                sessionClass,
+                qqHookHandles,
+                TAG
+            )
         } catch (e: Exception) {
             Log.e(TAG, "[QQMusic] ✗ Hook Compat Session", e)
         }

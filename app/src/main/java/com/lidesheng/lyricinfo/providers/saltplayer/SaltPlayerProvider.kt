@@ -3,9 +3,7 @@ package com.lidesheng.lyricinfo.providers.saltplayer
 import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
-import android.os.Handler
 import android.os.Bundle
-import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import com.lidesheng.lyricinfo.core.LyricCacheEntry
@@ -48,7 +46,6 @@ class SaltPlayerProvider : LyricProvider {
         private const val PACKAGE_NAME = "com.salt.music"
         private const val SALT_SONG_CLASS = "com.salt.music.data.entry.Song"
         private const val CAPTURE_BIND_WINDOW_MS = 1_500L
-        private val REFRESH_DELAYS_MS = longArrayOf(0L, 50L, 150L, 350L)
     }
 
     override val packageName = PACKAGE_NAME
@@ -62,7 +59,6 @@ class SaltPlayerProvider : LyricProvider {
     private var lastLoggedSongId: String? = null
     @Volatile
     private var currentSongChangedAt: Long = 0L
-    private val refreshHandler = Handler(Looper.getMainLooper())
 
     override fun onAppLoaded(module: XposedModule, param: PackageLoadedParam) {
         Log.i(TAG, "[Hook] ${param.packageName}")
@@ -570,9 +566,7 @@ class SaltPlayerProvider : LyricProvider {
     }
 
     private fun refreshMediaSession() {
-        REFRESH_DELAYS_MS.forEach { delayMs ->
-            refreshHandler.postDelayed({ refreshMediaSessionNow() }, delayMs)
-        }
+        refreshMediaSessionNow()
     }
 
     private fun refreshMediaSessionNow() {
@@ -621,7 +615,8 @@ class SaltPlayerProvider : LyricProvider {
     private fun injectLyricInfo(bundle: Bundle): Boolean {
         val identity = resolveBuildIdentity(bundle)
         if (identity == null) {
-            bundle.remove(LYRIC_INFO_KEY)
+            // Without a stable identity we cannot safely replace an existing
+            // payload. Leave the bundle untouched until Salt resolves a track.
             return false
         }
 
@@ -656,11 +651,17 @@ class SaltPlayerProvider : LyricProvider {
 
         val result = lyricCache[songKey]
         if (result == null) {
-            // Lyrics are captured asynchronously. A copied metadata Bundle may still carry
-            // the previous track's JSON; keep it until this track's result is ready. The
-            // consumer validates the JSON identity against the top-level metadata and will
-            // reject that stale value instead of rendering it for the new track.
-            return false
+            val pendingJson = LyricInfoSerializer.encodePending(
+                songName = identity.title,
+                artist = identity.artist,
+                songId = identity.id,
+                album = identity.album,
+                identity = identity.id
+            ) ?: return false
+            if (bundle.getString(LYRIC_INFO_KEY) == pendingJson) return false
+            bundle.putString(LYRIC_INFO_KEY, pendingJson)
+            Log.d(TAG, "[Inject] pending ${identity.title}")
+            return true
         }
 
         val json = LyricInfoSerializer.encode(
@@ -668,8 +669,10 @@ class SaltPlayerProvider : LyricProvider {
             artist = identity.artist,
             songId = identity.id,
             album = identity.album,
-            result = result
+            result = result,
+            identity = identity.id
         ) ?: return false
+        if (bundle.getString(LYRIC_INFO_KEY) == json) return false
         bundle.putString(LYRIC_INFO_KEY, json)
         Log.d(TAG, "[Inject] ✓ ${identity.title}")
         return true
@@ -739,7 +742,8 @@ class SaltPlayerProvider : LyricProvider {
             displaySubtitle = displaySubtitle,
             album = album
         ) ?: return null
-        val fallbackKey = "${resolved.title}|${resolved.artist}|$duration"
+        val hasStableId = !resolved.mediaId.isNullOrBlank()
+        val fallbackKey = "meta:${resolved.title}|${resolved.artist}|$duration"
             .hashCode()
             .toString()
         return ResolvedMetadata(
@@ -747,7 +751,8 @@ class SaltPlayerProvider : LyricProvider {
                 id = resolved.mediaId ?: fallbackKey,
                 title = resolved.title,
                 artist = resolved.artist,
-                album = resolved.album
+                album = resolved.album,
+                hasStableId = hasStableId
             ),
             relay = resolved.relay
         )
@@ -768,6 +773,5 @@ class SaltPlayerProvider : LyricProvider {
         lastLoggedSongId = null
         currentSongChangedAt = 0L
         mediaSessions.clear()
-        refreshHandler.removeCallbacksAndMessages(null)
     }
 }

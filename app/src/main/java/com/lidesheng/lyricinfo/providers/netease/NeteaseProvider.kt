@@ -26,7 +26,7 @@ class NeteaseProvider : BaseLyricProvider() {
 
     private val compatHookHandles = mutableListOf<XposedInterface.HookHandle>()
     private val metadataCache = ConcurrentHashMap<String, NeteaseApi.SongMetadata>()
-    private val metadataFetchingIds = ConcurrentHashMap.newKeySet<String>()
+    private val metadataRequestedIds = ConcurrentHashMap.newKeySet<String>()
     private val missingMediaIdLogged = AtomicBoolean(false)
     private val metadataExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "LyricInfo-NeteaseMetadata").apply { isDaemon = true }
@@ -54,7 +54,7 @@ class NeteaseProvider : BaseLyricProvider() {
         compatHookHandles.clear()
         metadataExecutor.shutdownNow()
         metadataCache.clear()
-        metadataFetchingIds.clear()
+        metadataRequestedIds.clear()
         super.onDestroy()
     }
 
@@ -87,6 +87,18 @@ class NeteaseProvider : BaseLyricProvider() {
         return null
     }
 
+    override fun resolvePendingTrackMetadata(bundle: Bundle): TrackMetadata? {
+        val songId = readMediaId(bundle)
+        if (songId.isBlank()) return null
+        return TrackMetadata(
+            songName = "",
+            artist = "",
+            album = "",
+            songId = songId,
+            cacheKey = songId
+        )
+    }
+
     private fun readMediaId(bundle: Bundle): String {
         val stringId = bundle.getCharSequence(MediaMetadata.METADATA_KEY_MEDIA_ID)
             ?.toString()
@@ -105,12 +117,14 @@ class NeteaseProvider : BaseLyricProvider() {
     }
 
     private fun requestSongMetadata(songId: String) {
-        if (metadataCache.containsKey(songId) || !metadataFetchingIds.add(songId)) return
+        if (metadataCache.containsKey(songId) || !metadataRequestedIds.add(songId)) return
 
         Log.i(TAG, "[Netease] Query song metadata: id=$songId")
         metadataExecutor.execute {
             try {
+                if (!isProviderActive()) return@execute
                 val metadata = NeteaseApi.fetchSongMetadata(songId.toLong())
+                if (!isProviderActive()) return@execute
                 if (metadata == null) {
                     Log.w(TAG, "[Netease] No song metadata: id=$songId")
                     return@execute
@@ -125,10 +139,9 @@ class NeteaseProvider : BaseLyricProvider() {
                 )
                 Log.i(TAG, "[Netease] [Song] ${track.songName} - ${track.artist}")
                 requestLyric(track, " (metadata)")
+                publishLyricState(track, lyricCache[track.cacheKey])
             } catch (e: Exception) {
                 Log.e(TAG, "[Netease] ✗ Query song metadata: id=$songId", e)
-            } finally {
-                metadataFetchingIds.remove(songId)
             }
         }
     }
@@ -147,7 +160,8 @@ class NeteaseProvider : BaseLyricProvider() {
             val handle = module.hook(buildMethod).intercept { chain ->
                 try {
                     val bundle = bundleField.get(chain.thisObject) as Bundle
-                    injectLyricInfo(bundle, " (compatBuilder)")
+                    val track = injectLyricInfo(bundle, " (compatBuilder)")
+                    invalidateCompatMetadataTarget(track)
                 } catch (e: Exception) {
                     Log.e(TAG, "[Netease] ✗ Inject Compat Builder", e)
                 }
@@ -180,7 +194,13 @@ class NeteaseProvider : BaseLyricProvider() {
                     val metadata = chain.getArg(0)
                     if (metadata != null) {
                         val bundle = bundleField.get(metadata) as Bundle
-                        injectLyricInfo(bundle, " (compatSession)")
+                        observeCompatMetadata(
+                            session = chain.thisObject,
+                            metadata = metadata,
+                            bundle = bundle,
+                            setMetadataMethod = setMetadataMethod,
+                            logSuffix = " (compatSession)"
+                        )
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "[Netease] ✗ Inject Compat Session", e)
@@ -189,6 +209,12 @@ class NeteaseProvider : BaseLyricProvider() {
             }
             compatHookHandles.add(handle)
             Log.i(TAG, "[Netease] ✓ Hooked MediaSessionCompat.setMetadata()")
+            hookCompatSessionRelease(
+                module,
+                sessionClass,
+                compatHookHandles,
+                TAG
+            )
         } catch (e: Exception) {
             Log.e(TAG, "[Netease] ✗ Hook Compat Session", e)
         }

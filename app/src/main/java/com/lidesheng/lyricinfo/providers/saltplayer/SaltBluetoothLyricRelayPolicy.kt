@@ -58,8 +58,8 @@ internal object SaltBluetoothLyricRelayPolicy {
             source = "standard"
         }
 
-        if (mediaId.isNullOrBlank() && resolvedTitle.isBlank() &&
-            resolvedArtist.isBlank() && album.isNullOrBlank()
+        if (mediaId.isNullOrBlank() &&
+            (resolvedTitle.isBlank() || resolvedArtist.isBlank())
         ) {
             return null
         }

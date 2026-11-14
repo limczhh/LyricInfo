@@ -98,6 +98,24 @@ class QishuiProvider : BaseLyricProvider() {
         return cached
     }
 
+    /**
+     * The media ID is safe even before Qishui's playable object is captured.
+     * Do not use TITLE/ARTIST here because Bluetooth lyric controls may replace
+     * them with the currently displayed line.
+     */
+    override fun resolvePendingTrackMetadata(bundle: Bundle): TrackMetadata? {
+        val songId = readMediaId(bundle)
+        if (songId.isBlank()) return null
+        return metadataCache[songId]
+            ?: readCachedMetadata(songId)?.also { metadataCache[songId] = it }
+            ?: TrackMetadata(
+                songName = "",
+                artist = "",
+                album = "",
+                songId = songId
+            )
+    }
+
     override fun requestLyric(track: TrackMetadata, logSuffix: String) {
         // Prime Qishui's own cache synchronously so the current metadata event can inject.
         if (!lyricCache.containsKey(track.cacheKey)) {
@@ -375,6 +393,14 @@ class QishuiProvider : BaseLyricProvider() {
             lyricCache[track.songId] = lyric
         }
 
+        val currentTrack = metadataCache[track.songId] ?: track
+        if (lyric == null && lyricCache[track.songId] == null) {
+            // This also primes the local KRC cache and keeps the request keyed
+            // to the same trusted media ID.
+            requestLyric(currentTrack, " (track)")
+        }
+        val currentLyric = lyricCache[track.songId]
+
         if (changed || lyricChanged) {
             unresolvedMediaIds.remove(track.songId)
             Log.i(
@@ -382,6 +408,9 @@ class QishuiProvider : BaseLyricProvider() {
                 "[Qishui] [Song] ${track.songName} - ${track.artist} " +
                     "(source=$source, lyric=${if (lyric != null) "app" else "cache"})"
             )
+        }
+        if (changed || lyricChanged) {
+            publishLyricState(currentTrack, currentLyric)
         }
     }
 
@@ -510,7 +539,8 @@ class QishuiProvider : BaseLyricProvider() {
             val handle = module.hook(buildMethod).intercept { chain ->
                 try {
                     val bundle = bundleField.get(chain.thisObject) as Bundle
-                    injectLyricInfo(bundle, " (compatBuilder)")
+                    val track = injectLyricInfo(bundle, " (compatBuilder)")
+                    invalidateCompatMetadataTarget(track)
                 } catch (e: Exception) {
                     Log.e(TAG, "[Qishui] ✗ Inject Compat Builder", e)
                 }
@@ -543,7 +573,13 @@ class QishuiProvider : BaseLyricProvider() {
                     val metadata = chain.getArg(0)
                     if (metadata != null) {
                         val bundle = bundleField.get(metadata) as Bundle
-                        injectLyricInfo(bundle, " (compatSession)")
+                        observeCompatMetadata(
+                            session = chain.thisObject,
+                            metadata = metadata,
+                            bundle = bundle,
+                            setMetadataMethod = setMetadataMethod,
+                            logSuffix = " (compatSession)"
+                        )
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "[Qishui] ✗ Inject Compat Session", e)
@@ -552,6 +588,12 @@ class QishuiProvider : BaseLyricProvider() {
             }
             qishuiHookHandles.add(handle)
             Log.i(TAG, "[Qishui] ✓ Hooked MediaSessionCompat.setMetadata()")
+            hookCompatSessionRelease(
+                module,
+                sessionClass,
+                qishuiHookHandles,
+                TAG
+            )
         } catch (e: Exception) {
             Log.e(TAG, "[Qishui] ✗ Hook Compat Session", e)
         }

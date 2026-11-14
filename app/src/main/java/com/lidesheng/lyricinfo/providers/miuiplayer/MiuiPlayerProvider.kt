@@ -134,7 +134,9 @@ class MiuiPlayerProvider : LyricProvider {
                                     try {
                                         val bundleField = meta.javaClass.getDeclaredField("mBundle").apply { isAccessible = true }
                                         val bundle = bundleField.get(meta) as Bundle
-                                        injectLyricToBundle(bundle, track)
+                                        if (!injectLyricToBundle(bundle, track)) {
+                                            return@intercept result
+                                        }
                                         
                                         val setMetaMethod = session.javaClass.getDeclaredMethod("setMetadata", MediaMetadata::class.java)
                                         setMetaMethod.invoke(session, meta)
@@ -229,14 +231,18 @@ class MiuiPlayerProvider : LyricProvider {
         songId: String?
     ): TrackMetadata? {
         val cleanSongName = songName?.trim().orEmpty()
-        if (cleanSongName.isEmpty()) {
+        val cleanArtist = artist?.trim().orEmpty()
+        val cleanSongId = songId?.trim().orEmpty()
+        if (cleanSongId.isEmpty() &&
+            (cleanSongName.isEmpty() || cleanArtist.isEmpty())
+        ) {
             return null
         }
         return TrackMetadata(
             songName = cleanSongName,
-            artist = artist?.trim().orEmpty(),
+            artist = cleanArtist,
             album = album?.trim().orEmpty(),
-            songId = songId?.trim().orEmpty()
+            songId = cleanSongId
         )
     }
 
@@ -259,6 +265,9 @@ class MiuiPlayerProvider : LyricProvider {
         if (first.songId.isNotEmpty() && second.songId.isNotEmpty() && first.songId == second.songId) {
             return true
         }
+        if (first.songId.isNotEmpty() && second.songId.isNotEmpty()) {
+            return false
+        }
         if (first.songName.isEmpty() || second.songName.isEmpty() || first.songName != second.songName) {
             return false
         }
@@ -275,18 +284,17 @@ class MiuiPlayerProvider : LyricProvider {
             .takeUnless { it.isNullOrBlank() }
             ?: bundle.getString(MediaMetadata.METADATA_KEY_ARTIST)
         val album = bundle.getString(MediaMetadata.METADATA_KEY_ALBUM)
-        val mediaId = bundle.getString(MediaMetadata.METADATA_KEY_MEDIA_ID)
+        val mediaId = bundle.getCharSequence(MediaMetadata.METADATA_KEY_MEDIA_ID)?.toString()
         return createTrackMetadata(title, artist, album, mediaId)
     }
 
     private fun findCachedLyric(bundle: Bundle): CapturedLyric? {
+        val bundleTrack = trackFromBundle(bundle) ?: return null
         val sourceTrack = lastSourceTrack.get()
-        if (sourceTrack != null && trackFromBundle(bundle)?.let { sameTrack(sourceTrack, it) } == true) {
+        if (sourceTrack != null && sameTrack(sourceTrack, bundleTrack)) {
             return lyricCache[sourceTrack.key]
         }
-
-        val bundleTrack = trackFromBundle(bundle) ?: return null
-        return lyricCache.values.firstOrNull { sameTrack(it.metadata, bundleTrack) }
+        return lyricCache[bundleTrack.key]
     }
 
     private fun loadCachedLyric(track: TrackMetadata) {
@@ -420,23 +428,44 @@ class MiuiPlayerProvider : LyricProvider {
             }
             hookHandles.add(setMetaHandle)
 
+            val releaseMethod = sessionClass.getDeclaredMethod("release")
+            module.deoptimize(releaseMethod)
+            val releaseHandle = module.hook(releaseMethod).intercept { chain ->
+                if (lastMediaSession === chain.thisObject) {
+                    lastMediaSession = null
+                    lastMediaMetadata = null
+                }
+                chain.proceed()
+            }
+            hookHandles.add(releaseHandle)
+
             Log.i(TAG, "[Hook] ✓ MediaMetadata")
         } catch (e: Exception) {
             Log.e(TAG, "[Hook] ✗ MediaMetadata", e)
         }
     }
 
-    private fun injectLyricToBundle(bundle: Bundle, preferredTrack: TrackMetadata? = null) {
-        val captured = lastCapturedLyric.getAndSet(null)
-        if (captured != null) {
+    private fun injectLyricToBundle(
+        bundle: Bundle,
+        preferredTrack: TrackMetadata? = null
+    ): Boolean {
+        val bundleTrack = trackFromBundle(bundle)
+        val captured = lastCapturedLyric.get()
+        val capturedMatchesBundle = captured != null &&
+            bundleTrack?.let { sameTrack(captured.metadata, it) } == true
+        val capturedMatchesPreferred = captured != null &&
+            preferredTrack?.let { sameTrack(captured.metadata, it) } == true
+        if ((capturedMatchesBundle || capturedMatchesPreferred) &&
+            lastCapturedLyric.compareAndSet(captured, null)
+        ) {
             storeCachedLyric(captured)
         }
 
-        val pendingTrackMatchesBundle = captured != null &&
-            trackFromBundle(bundle)?.let { sameTrack(captured.metadata, it) } == true
         val payload = when {
-            preferredTrack != null -> lyricCache[preferredTrack.key]
-            pendingTrackMatchesBundle -> lyricCache[captured!!.metadata.key]
+            preferredTrack != null &&
+                (bundleTrack == null || sameTrack(preferredTrack, bundleTrack)) ->
+                lyricCache[preferredTrack.key]
+            capturedMatchesBundle -> lyricCache[captured!!.metadata.key]
             else -> findCachedLyric(bundle)
         }
         if (payload != null) {
@@ -450,13 +479,35 @@ class MiuiPlayerProvider : LyricProvider {
                 artist = track.artist,
                 songId = track.songId,
                 album = track.album,
-                result = payload.result
-            ) ?: return
+                result = payload.result,
+                identity = track.key
+            ) ?: return false
+            if (bundle.getString(LYRIC_INFO_KEY) == json) return false
             bundle.putString(LYRIC_INFO_KEY, json)
+            return true
         }
+
+        val pendingTrack = when {
+            preferredTrack != null &&
+                (bundleTrack == null || sameTrack(preferredTrack, bundleTrack)) -> preferredTrack
+            else -> bundleTrack
+        }
+        val pendingJson = pendingTrack?.let { track ->
+            LyricInfoSerializer.encodePending(
+                songName = track.songName,
+                artist = track.artist,
+                songId = track.songId,
+                album = track.album,
+                identity = track.key
+            )
+        } ?: return false
+        if (bundle.getString(LYRIC_INFO_KEY) == pendingJson) return false
+        bundle.putString(LYRIC_INFO_KEY, pendingJson)
+        return true
     }
 
     override fun onDestroy() {
+        hookHandles.forEach { it.unhook() }
         lyricCache.clear()
         lastCapturedLyric.set(null)
         hookHandles.clear()

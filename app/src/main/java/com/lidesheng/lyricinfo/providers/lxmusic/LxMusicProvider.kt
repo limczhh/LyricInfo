@@ -44,8 +44,13 @@ open class LxMusicProvider(
         private const val MAX_LYRIC_CACHE_ENTRIES = 64
     }
 
+    private data class CapturedLyric(
+        val songKey: String?,
+        val result: LyricResult
+    )
+
     private val lyricCache = LruCache<String, LyricResult>(MAX_LYRIC_CACHE_ENTRIES)
-    private val lastCapturedLyric = AtomicReference<LyricResult?>(null)
+    private val lastCapturedLyric = AtomicReference<CapturedLyric?>(null)
     private val hookHandles = mutableListOf<XposedInterface.HookHandle>()
     private var lastMediaSession: Any? = null
     private var lastMediaMetadata: MediaMetadata? = null
@@ -107,10 +112,16 @@ open class LxMusicProvider(
         val transNormalized = trans?.takeIf { it.isNotBlank() }?.let { LyricNormalizer.normalize(it) }
         val romaNormalized = roma?.takeIf { it.isNotBlank() }?.let { LyricNormalizer.normalize(it) }
 
+        val currentSongKey = runCatching {
+            lastMediaMetadata?.let { songKey(metadataBundle(it)) }
+        }.getOrNull()
         lastCapturedLyric.set(
-            normalized.copy(
-                translation = transNormalized?.preferredLane(),
-                roma = romaNormalized?.preferredLane()
+            CapturedLyric(
+                songKey = currentSongKey,
+                result = normalized.copy(
+                    translation = transNormalized?.preferredLane(),
+                    roma = romaNormalized?.preferredLane()
+                )
             )
         )
         refreshMediaSession()
@@ -159,6 +170,16 @@ open class LxMusicProvider(
                 chain.proceed()
             }
             hookHandles.add(handle)
+            val releaseMethod = sessionClass.getDeclaredMethod("release")
+            module.deoptimize(releaseMethod)
+            val releaseHandle = module.hook(releaseMethod).intercept { chain ->
+                if (lastMediaSession === chain.thisObject) {
+                    lastMediaSession = null
+                    lastMediaMetadata = null
+                }
+                chain.proceed()
+            }
+            hookHandles.add(releaseHandle)
         } catch (e: Exception) {
             Log.e(TAG, "[LxMusic] Failed to hook MediaSession.setMetadata()", e)
         }
@@ -168,35 +189,65 @@ open class LxMusicProvider(
         val session = lastMediaSession ?: return
         val metadata = lastMediaMetadata ?: return
         try {
-            inject(metadataBundle(metadata))
+            if (!inject(metadataBundle(metadata))) return
             setMetadataMethod(session).invoke(session, metadata)
         } catch (e: Exception) {
             Log.e(TAG, "[LxMusic] Failed to refresh MediaSession", e)
         }
     }
 
-    private fun inject(bundle: Bundle) {
-        val key = songKey(bundle)
-        val captured = lastCapturedLyric.getAndSet(null)
-        if (captured != null) {
-            lyricCache.put(key, captured)
+    private fun inject(bundle: Bundle): Boolean {
+        val key = songKey(bundle) ?: return false
+        val captured = lastCapturedLyric.get()
+        if (captured != null && captured.songKey == key &&
+            lastCapturedLyric.compareAndSet(captured, null)
+        ) {
+            lyricCache.put(key, captured.result)
         }
 
-        val result = lyricCache.get(key) ?: return
-        val json = LyricInfoSerializer.encode(
-            songName = bundle.getString(MediaMetadata.METADATA_KEY_TITLE),
-            artist = bundle.getString(MediaMetadata.METADATA_KEY_ARTIST),
-            songId = bundle.getCharSequence(MediaMetadata.METADATA_KEY_MEDIA_ID)?.toString(),
-            album = bundle.getString(MediaMetadata.METADATA_KEY_ALBUM),
-            result = result
-        ) ?: return
-        bundle.putString(LYRIC_INFO_KEY, json)
+        val songName = bundle.getString(MediaMetadata.METADATA_KEY_TITLE)
+        val artist = bundle.getString(MediaMetadata.METADATA_KEY_ARTIST)
+        val songId = bundle.getCharSequence(MediaMetadata.METADATA_KEY_MEDIA_ID)?.toString()
+        val album = bundle.getString(MediaMetadata.METADATA_KEY_ALBUM)
+        val result = lyricCache.get(key)
+        if (result != null) {
+            val json = LyricInfoSerializer.encode(
+                songName = songName,
+                artist = artist,
+                songId = songId,
+                album = album,
+                result = result,
+                identity = key
+            ) ?: return false
+            if (bundle.getString(LYRIC_INFO_KEY) == json) return false
+            bundle.putString(LYRIC_INFO_KEY, json)
+            return true
+        }
+
+        val pendingJson = LyricInfoSerializer.encodePending(
+            songName = songName,
+            artist = artist,
+            songId = songId,
+            album = album,
+            identity = key
+        ) ?: return false
+        if (bundle.getString(LYRIC_INFO_KEY) == pendingJson) return false
+        bundle.putString(LYRIC_INFO_KEY, pendingJson)
+        return true
     }
 
-    private fun songKey(bundle: Bundle): String {
-        val title = bundle.getString(MediaMetadata.METADATA_KEY_TITLE)
-        val artist = bundle.getString(MediaMetadata.METADATA_KEY_ARTIST)
-        return "$title|$artist".hashCode().toString()
+    private fun songKey(bundle: Bundle): String? {
+        val mediaId = bundle.getCharSequence(MediaMetadata.METADATA_KEY_MEDIA_ID)
+            ?.toString()
+            ?.trim()
+            .orEmpty()
+        if (mediaId.isNotBlank()) return "id:$mediaId"
+
+        val title = bundle.getString(MediaMetadata.METADATA_KEY_TITLE).orEmpty().trim()
+        val artist = bundle.getString(MediaMetadata.METADATA_KEY_ARTIST).orEmpty().trim()
+        val album = bundle.getString(MediaMetadata.METADATA_KEY_ALBUM).orEmpty().trim()
+        if (title.isBlank() || artist.isBlank()) return null
+        return "meta:$title|$artist|$album"
     }
 
     private fun builderBundle(builder: Any): Bundle {

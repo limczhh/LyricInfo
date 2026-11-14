@@ -22,9 +22,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * object, then obtains the complete lyric from Kugou's lyric API.
  *
  * If neither the stable-hash disk cache nor Kugou's API can provide a lyric,
- * this provider deliberately leaves the bundle untouched. It does not enable
- * or consume Kugou's native LyricInfo path; no old internal LyricData,
- * private lyric file, or fuzzy title/artist search is used as a source.
+ * the shared provider path keeps a metadata-only LyricInfo payload in place.
+ * It does not enable or consume Kugou's native LyricInfo path; no old internal
+ * LyricData, private lyric file, or fuzzy title/artist search is used as a source.
  */
 @SuppressLint("SoonBlockedPrivateApi")
 class KugouProvider : BaseLyricProvider() {
@@ -129,6 +129,20 @@ class KugouProvider : BaseLyricProvider() {
         compatSetMetadataMethod = null
         refreshIdentity.remove()
         super.onDestroy()
+    }
+
+    override fun onMediaSessionReleased(session: Any) {
+        super.onMediaSessionReleased(session)
+        if (frameworkTarget?.session === session) {
+            frameworkTarget = null
+        }
+    }
+
+    override fun onCompatSessionReleased(session: Any) {
+        super.onCompatSessionReleased(session)
+        if (compatTarget?.session === session) {
+            compatTarget = null
+        }
     }
 
     /**
@@ -443,6 +457,12 @@ class KugouProvider : BaseLyricProvider() {
             }
             kugouHookHandles.add(handle)
             Log.i(TAG, "[Kugou] ✓ Hooked MediaSessionCompat.setMetadata()")
+            hookCompatSessionRelease(
+                module,
+                sessionClass,
+                kugouHookHandles,
+                TAG
+            )
         } catch (e: Exception) {
             Log.e(TAG, "[Kugou] ✗ Hook Compat Session", e)
         }
