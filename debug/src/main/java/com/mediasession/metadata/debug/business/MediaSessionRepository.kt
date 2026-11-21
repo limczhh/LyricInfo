@@ -94,6 +94,9 @@ object MediaSessionRepository {
             title = pick { it.title },
             artist = pick { it.artist },
             album = pick { it.album },
+            metadataFields = ordered.firstOrNull { it.metadataFields.isNotEmpty() }
+                ?.metadataFields
+                .orEmpty(),
             artwork = ordered.firstOrNull { it.artwork != null }?.artwork,
             lyricInfo = lyric,
             playbackState = current.playbackState,

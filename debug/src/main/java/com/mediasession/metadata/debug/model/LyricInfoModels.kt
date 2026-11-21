@@ -15,6 +15,19 @@ data class LyricLine(
     val roma: String? = null
 )
 
+enum class LyricInfoFieldPresence {
+    ABSENT,
+    EMPTY,
+    VALUE
+}
+
+data class LyricInfoField(
+    val key: String,
+    val presence: LyricInfoFieldPresence,
+    val value: String? = null,
+    val isLyricContent: Boolean = false
+)
+
 data class LyricInfoDocument(
     val songName: String,
     val artist: String,
@@ -25,5 +38,6 @@ data class LyricInfoDocument(
     val usedRawLyric: Boolean,
     val hasTranslation: Boolean,
     val hasRoma: Boolean,
-    val lines: List<LyricLine>
+    val lines: List<LyricLine>,
+    val fields: List<LyricInfoField> = emptyList()
 )

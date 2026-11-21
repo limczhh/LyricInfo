@@ -1,6 +1,5 @@
 package com.mediasession.metadata.debug.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -38,9 +37,7 @@ private fun DebugNavigation() {
 
     CompositionLocalProvider(LocalNavigator provides navigator) {
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MiuixTheme.colorScheme.surface)
+            modifier = Modifier.fillMaxSize()
         ) {
             NavDisplay(
                 backStack = backStack,

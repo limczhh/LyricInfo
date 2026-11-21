@@ -1,6 +1,8 @@
 package com.mediasession.metadata.debug.business
 
 import com.mediasession.metadata.debug.model.LyricInfoDocument
+import com.mediasession.metadata.debug.model.LyricInfoField
+import com.mediasession.metadata.debug.model.LyricInfoFieldPresence
 import com.mediasession.metadata.debug.model.LyricLine
 import com.mediasession.metadata.debug.model.LyricWord
 import org.json.JSONObject
@@ -16,11 +18,37 @@ object LyricInfoParser {
         "translatedLyric",
         "translateLyric",
         "transLyric",
+        "trans",
         "lyricTranslation",
         "translationLrc",
         "transLrc"
     )
     private val songMidKeys = listOf("songMid", "songmid", "media_mid")
+    private val readmeFields = listOf(
+        "songName",
+        "artist",
+        "album",
+        "songId",
+        "songMid",
+        "lyric",
+        "rawLyric",
+        "translation",
+        "roma"
+    )
+    private val lyricContentFields = setOf(
+        "lyric",
+        "rawLyric",
+        "translation",
+        "translationLyric",
+        "translatedLyric",
+        "translateLyric",
+        "transLyric",
+        "trans",
+        "lyricTranslation",
+        "translationLrc",
+        "transLrc",
+        "roma"
+    )
 
     private data class ParsedLine(
         val anchor: Long,
@@ -53,10 +81,6 @@ object LyricInfoParser {
         val roma = objectValue.optionalText("roma")
         val lines = attachLanes(primaryLines, translation, roma)
 
-        if (rawLyric.isNullOrBlank() && lyric.isNullOrBlank() && lines.isEmpty()) {
-            return@runCatching null
-        }
-
         val format = objectValue.optionalText("format")
             ?: if (primaryLines.any { it.words.isNotEmpty() }) "elrc" else "lrc"
         LyricInfoDocument(
@@ -72,9 +96,93 @@ object LyricInfoParser {
             usedRawLyric = useRaw,
             hasTranslation = lines.any { !it.translation.isNullOrBlank() },
             hasRoma = lines.any { !it.roma.isNullOrBlank() },
-            lines = lines
+            lines = lines,
+            fields = fieldsOf(objectValue)
         )
     }.getOrNull()
+
+    /** A safe field model used when the payload exists but cannot be parsed as JSON. */
+    fun empty(
+        fallbackTitle: String = "",
+        fallbackArtist: String = "",
+        fallbackAlbum: String = ""
+    ): LyricInfoDocument = LyricInfoDocument(
+        songName = fallbackTitle,
+        artist = fallbackArtist,
+        album = fallbackAlbum,
+        songId = "",
+        songMid = "",
+        format = "",
+        usedRawLyric = false,
+        hasTranslation = false,
+        hasRoma = false,
+        lines = emptyList(),
+        fields = readmeFields.map { key ->
+            LyricInfoField(
+                key = key,
+                presence = LyricInfoFieldPresence.ABSENT,
+                isLyricContent = key in lyricContentFields
+            )
+        }
+    )
+
+    private fun fieldsOf(objectValue: JSONObject): List<LyricInfoField> {
+        val aliases = (songMidKeys + translationKeys).toSet()
+        val known = readmeFields.toSet() + aliases
+        val standard = readmeFields.map { key ->
+            when (key) {
+                "songMid" -> fieldOfAny(objectValue, key, songMidKeys)
+                "translation" -> fieldOfAny(objectValue, key, translationKeys)
+                else -> fieldOf(objectValue, key)
+            }
+        }
+        val custom = buildList {
+            val keys = objectValue.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                if (key !in known) add(fieldOf(objectValue, key))
+            }
+        }
+        return standard + custom
+    }
+
+    private fun fieldOfAny(
+        objectValue: JSONObject,
+        canonicalKey: String,
+        keys: List<String>
+    ): LyricInfoField {
+        val actualKey = keys.firstOrNull { objectValue.has(it) } ?: return fieldOf(objectValue, canonicalKey)
+        return fieldOf(objectValue, canonicalKey, actualKey)
+    }
+
+    private fun fieldOf(
+        objectValue: JSONObject,
+        key: String,
+        sourceKey: String = key
+    ): LyricInfoField {
+        if (!objectValue.has(sourceKey)) {
+            return LyricInfoField(
+                key = key,
+                presence = LyricInfoFieldPresence.ABSENT,
+                isLyricContent = key in lyricContentFields
+            )
+        }
+
+        val raw = objectValue.opt(sourceKey)
+        val value = raw
+            ?.takeUnless { it === JSONObject.NULL }
+            ?.toString()
+        return LyricInfoField(
+            key = key,
+            presence = if (value.isNullOrBlank()) {
+                LyricInfoFieldPresence.EMPTY
+            } else {
+                LyricInfoFieldPresence.VALUE
+            },
+            value = value,
+            isLyricContent = key in lyricContentFields
+        )
+    }
 
     private fun attachLanes(
         originalLines: List<ParsedLine>,
@@ -199,6 +307,5 @@ object LyricInfoParser {
     }
 
     private fun JSONObject.optionalText(key: String): String? =
-        if (isNull(key)) null else optString(key).trim().takeIf { it.isNotBlank() }
-
+        if (!has(key) || isNull(key)) null else optString(key).trim().takeIf { it.isNotBlank() }
 }

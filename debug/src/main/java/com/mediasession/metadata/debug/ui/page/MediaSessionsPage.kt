@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -59,8 +58,6 @@ import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.glass.GlassTopAppBar
-import top.yukonga.miuix.kmp.glass.GlassTopAppBarDefaults
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Album
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -74,6 +71,8 @@ fun MediaSessionsPage(onOpen: (String) -> Unit) {
     val listState = rememberLazyListState()
     val scrollBehavior = MiuixScrollBehavior()
     val pageTitle = stringResource(R.string.page_title_media_session_reader)
+    val contentScrolled = listState.canScrollBackward ||
+        scrollBehavior.state.overscrollOffset < -1f
 
     DisposableEffect(Unit) {
         val observer = object : MediaSessionRepository.Observer {
@@ -101,20 +100,16 @@ fun MediaSessionsPage(onOpen: (String) -> Unit) {
 
     Scaffold(
         topBar = {
-            GlassTopAppBar(
+            MediaSessionTopAppBar(
                 title = pageTitle,
-                largeTitle = pageTitle,
-                expandable = true,
+                isContentScrolled = contentScrolled,
                 scrollBehavior = scrollBehavior,
-                bandBrush = GlassTopAppBarDefaults.bandBrush(MiuixTheme.colorScheme.surface)
             )
         },
-        contentWindowInsets = WindowInsets(0)
     ) { innerPadding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(MiuixTheme.colorScheme.surface)
         ) {
             LazyColumn(
                 state = listState,

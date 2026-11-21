@@ -45,6 +45,7 @@ object MediaSnapshotFactory {
             },
             artist = metadata.text(MediaMetadata.METADATA_KEY_ARTIST),
             album = metadata.text(MediaMetadata.METADATA_KEY_ALBUM),
+            metadataFields = metadata?.toDisplayFields().orEmpty(),
             artwork = artworkBytes(controller, metadata),
             lyricInfo = metadata?.getString(LYRIC_INFO_KEY)?.takeIf { it.isNotBlank() },
             playbackState = playbackState?.state ?: PlaybackState.STATE_NONE,

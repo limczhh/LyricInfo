@@ -11,6 +11,7 @@ data class MediaSessionRecord(
     val title: String,
     val artist: String,
     val album: String,
+    val metadataFields: List<MediaMetadataField> = emptyList(),
     val artwork: ByteArray? = null,
     val lyricInfo: String?,
     val playbackState: Int,

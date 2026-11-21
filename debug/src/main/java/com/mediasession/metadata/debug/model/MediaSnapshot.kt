@@ -2,6 +2,7 @@ package com.mediasession.metadata.debug.model
 
 import android.media.session.PlaybackState
 import android.os.SystemClock
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** One observation from one MediaSession acquisition path. */
@@ -14,6 +15,7 @@ data class MediaSnapshot(
     val title: String,
     val artist: String,
     val album: String,
+    val metadataFields: List<MediaMetadataField> = emptyList(),
     val artwork: ByteArray? = null,
     val lyricInfo: String?,
     val playbackState: Int,
@@ -64,6 +66,14 @@ data class MediaSnapshot(
         put("title", title)
         put("artist", artist)
         put("album", album)
+        put("metadataFields", JSONArray().apply {
+            metadataFields.forEach { field ->
+                put(JSONObject().apply {
+                    put("key", field.key)
+                    if (field.value == null) put("value", JSONObject.NULL) else put("value", field.value)
+                })
+            }
+        })
         if (lyricInfo == null) put("lyricInfo", JSONObject.NULL) else put("lyricInfo", lyricInfo)
         put("playbackState", playbackState)
         put("position", position)
@@ -82,6 +92,24 @@ data class MediaSnapshot(
             } else {
                 json.optString("lyricInfo").takeIf { it.isNotBlank() }
             }
+            val metadataFields = json.optJSONArray("metadataFields")?.let { array ->
+                buildList {
+                    for (index in 0 until array.length()) {
+                        val field = array.optJSONObject(index) ?: continue
+                        val key = field.optString("key")
+                        if (key.isBlank()) continue
+                        val rawValue = field.opt("value")
+                        add(
+                            MediaMetadataField(
+                                key = key,
+                                value = rawValue
+                                    ?.takeUnless { it === JSONObject.NULL }
+                                    ?.toString()
+                            )
+                        )
+                    }
+                }
+            }.orEmpty()
             MediaSnapshot(
                 source = json.optString("source"),
                 sessionId = json.optString("sessionId"),
@@ -91,6 +119,7 @@ data class MediaSnapshot(
                 title = json.optString("title"),
                 artist = json.optString("artist"),
                 album = json.optString("album"),
+                metadataFields = metadataFields,
                 lyricInfo = lyricInfo,
                 playbackState = json.optInt("playbackState", PlaybackState.STATE_NONE),
                 position = json.optLong("position", 0L),
