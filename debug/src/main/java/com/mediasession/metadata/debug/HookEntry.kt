@@ -1,23 +1,50 @@
 package com.mediasession.metadata.debug
 
+import android.app.Application
+import android.annotation.SuppressLint
+import android.content.Context
+import android.app.ActivityManager
+import android.media.MediaMetadata
+import android.media.session.MediaController
+import android.media.session.PlaybackState
+import android.os.Handler
+import android.os.Message
+import android.os.SystemClock
 import android.util.Log
+import com.mediasession.metadata.debug.bridge.DebugContract
+import com.mediasession.metadata.debug.source.MediaSnapshotFactory
+import io.github.libxposed.api.XposedInterface
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.HotReloadedParam
 import io.github.libxposed.api.XposedModuleInterface.HotReloadingParam
 import io.github.libxposed.api.XposedModuleInterface.ModuleLoadedParam
 import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam
-import java.lang.reflect.Field
-import java.lang.reflect.Modifier
+import java.lang.reflect.Method
+import java.util.WeakHashMap
 
+/** SystemUI-side acquisition path for MediaSession state and lyricInfo. */
+@SuppressLint("PrivateApi", "DiscouragedPrivateApi")
 class HookEntry : XposedModule() {
-
     companion object {
         private const val TAG = "MediaSessionDebug"
-        private const val LYRIC_INFO_KEY = "lyricInfo"
-        private const val STRING_PREVIEW_LENGTH = 200
         private const val LOG_CHUNK_LENGTH = 800
+        private const val MSG_UPDATE_PLAYBACK_STATE = 2
+        private const val MSG_UPDATE_METADATA = 3
+        private const val MSG_DESTROYED = 8
+        private const val FOREGROUND_CACHE_MS = 500L
     }
 
+    private val hookHandles = mutableListOf<XposedInterface.HookHandle>()
+    private val callbackControllers = WeakHashMap<Any, MediaController>()
+    private val loggedLyricInfo = WeakHashMap<MediaController, String>()
+    private val callbackLock = Any()
+    private val foregroundLock = Any()
+    @Volatile
+    private var cachedSystemContext: Context? = null
+    @Volatile
+    private var cachedForegroundAt: Long = 0L
+    @Volatile
+    private var cachedForeground: Boolean = false
     private var currentPackageReadyParam: PackageReadyParam? = null
 
     override fun onModuleLoaded(param: ModuleLoadedParam) {
@@ -25,160 +52,254 @@ class HookEntry : XposedModule() {
     }
 
     override fun onPackageReady(param: PackageReadyParam) {
-        Log.d(TAG, "[Module] ${param.packageName}")
+        if (param.packageName != DebugContract.SYSTEM_UI_PACKAGE) return
         currentPackageReadyParam = param
-        hookMediaControllerCallback(this, param.classLoader)
+        installHooks(param.classLoader)
     }
 
-    private fun hookMediaControllerCallback(module: XposedModule, classLoader: ClassLoader) {
-        try {
-            val callbackClass = Class.forName(
-                "android.media.session.MediaController\$Callback", true, classLoader
-            )
-            val metadataClass = Class.forName(
-                "android.media.MediaMetadata", true, classLoader
-            )
-            val onMetadataChanged = callbackClass.getDeclaredMethod("onMetadataChanged", metadataClass)
+    private fun installHooks(classLoader: ClassLoader) {
+        hookHandles.clear()
+        synchronized(callbackLock) {
+            callbackControllers.clear()
+            loggedLyricInfo.clear()
+        }
 
-            deoptimize(onMetadataChanged)
-            module.hook(onMetadataChanged).intercept { chain ->
-                val metadata = chain.args[0]
-                if (metadata != null) {
-                    Log.d(TAG, "══════════════════════════════════════════")
-                    Log.d(TAG, "[Metadata] onMetadataChanged")
-                    dumpObject(metadata)
-                }
+        val mediaControllerClass = MediaController::class.java
+        val callbackClass = MediaController.Callback::class.java
+        try {
+            hookRegisterCallback(
+                mediaControllerClass.getDeclaredMethod("registerCallback", callbackClass)
+            )
+            hookRegisterCallback(
+                mediaControllerClass.getDeclaredMethod(
+                    "registerCallback",
+                    callbackClass,
+                    Handler::class.java
+                )
+            )
+            hookUnregisterCallback(
+                mediaControllerClass.getDeclaredMethod("unregisterCallback", callbackClass)
+            )
+            Log.d(TAG, "[Hook] MediaController callback registration")
+        } catch (e: Exception) {
+            Log.e(TAG, "[Hook] MediaController registration failed", e)
+        }
+
+        try {
+            val messageHandlerClass = Class.forName(
+                "android.media.session.MediaController\$MessageHandler",
+                true,
+                classLoader
+            )
+            val handleMessage = messageHandlerClass.getDeclaredMethod(
+                "handleMessage",
+                Message::class.java
+            )
+            deoptimize(handleMessage)
+            hookHandles += hook(handleMessage).intercept { chain ->
+                val message = chain.getArg(0) as? Message
+                if (message != null) publishMessage(chain.thisObject, message)
                 chain.proceed()
             }
-
-            Log.d(TAG, "[Hook] ✓ MediaController.Callback.onMetadataChanged")
+            Log.d(TAG, "[Hook] MediaController.MessageHandler.handleMessage")
         } catch (e: Exception) {
-            Log.e(TAG, "[Hook] ✗ MediaController.Callback", e)
+            Log.e(TAG, "[Hook] MediaController.MessageHandler failed", e)
         }
-    }
 
-    private fun dumpObject(obj: Any, prefix: String = "") {
+        // Some vendor SystemUI builds dispatch through the callback base method directly.
         try {
-            val clazz = obj.javaClass
-            Log.d(TAG, "${prefix}Class: ${clazz.name}")
-
-            // 遍历所有字段（包括父类）
-            var currentClass: Class<*>? = clazz
-            while (currentClass != null && currentClass != Any::class.java) {
-                for (field in currentClass.declaredFields) {
-                    try {
-                        field.isAccessible = true
-                        val value = field.get(obj)
-                        val fieldName = field.name
-                        val fieldType = field.type.simpleName
-
-                        when {
-                            value == null -> Log.d(TAG, "${prefix}  $fieldName ($fieldType) = null")
-                            value.javaClass.name.contains("Bitmap") -> {
-                                try {
-                                    val w = value.javaClass.getMethod("getWidth").invoke(value)
-                                    val h = value.javaClass.getMethod("getHeight").invoke(value)
-                                    Log.d(TAG, "${prefix}  $fieldName ($fieldType) = Bitmap(${w}x${h})")
-                                } catch (_: Exception) {
-                                    Log.d(TAG, "${prefix}  $fieldName ($fieldType) = Bitmap")
-                                }
-                            }
-                            value is String -> logString(
-                                prefix = prefix,
-                                name = fieldName,
-                                type = fieldType,
-                                value = value,
-                                dumpFully = fieldName == LYRIC_INFO_KEY
-                            )
-                            value is android.os.Bundle -> {
-                                Log.d(TAG, "${prefix}  $fieldName ($fieldType) = Bundle:")
-                                dumpBundle(value, "$prefix    ")
-                            }
-                            else -> Log.d(TAG, "${prefix}  $fieldName ($fieldType) = $value")
-                        }
-                    } catch (e: Exception) {
-                        Log.d(TAG, "${prefix}  ${field.name} = <access error>")
-                    }
-                }
-                currentClass = currentClass.superclass
-            }
+            hookCallbackFallback(
+                callbackClass.getDeclaredMethod("onMetadataChanged", MediaMetadata::class.java)
+            )
+            hookCallbackFallback(
+                callbackClass.getDeclaredMethod(
+                    "onPlaybackStateChanged",
+                    PlaybackState::class.java
+                )
+            )
+            hookCallbackDestroyed(callbackClass.getDeclaredMethod("onSessionDestroyed"))
+            Log.d(TAG, "[Hook] MediaController.Callback fallback methods")
         } catch (e: Exception) {
-            Log.e(TAG, "${prefix}Dump failed", e)
+            Log.e(TAG, "[Hook] Callback fallback failed", e)
         }
     }
 
-    @Suppress("DEPRECATION")
-    private fun dumpBundle(bundle: android.os.Bundle, prefix: String = "") {
-        try {
-            val keys = bundle.keySet()
-            Log.d(TAG, "${prefix}Keys: ${keys.size}")
-
-            for (key in keys) {
-                val value = bundle.get(key)
-                when {
-                    value == null -> Log.d(TAG, "${prefix}  $key = null")
-                    value.javaClass.name.contains("Bitmap") -> {
-                        try {
-                            val w = value.javaClass.getMethod("getWidth").invoke(value)
-                            val h = value.javaClass.getMethod("getHeight").invoke(value)
-                            Log.d(TAG, "${prefix}  $key = Bitmap(${w}x${h})")
-                        } catch (_: Exception) {
-                            Log.d(TAG, "${prefix}  $key = Bitmap")
-                        }
-                    }
-                    value is String -> logString(
-                        prefix = prefix,
-                        name = key,
-                        type = value.javaClass.simpleName,
-                        value = value,
-                        dumpFully = key == LYRIC_INFO_KEY
-                    )
-                    else -> Log.d(TAG, "${prefix}  $key = $value")
-                }
+    private fun hookRegisterCallback(method: Method) {
+        deoptimize(method)
+        hookHandles += hook(method).intercept { chain ->
+            val controller = chain.thisObject as? MediaController
+            val callback = chain.getArg(0)
+            if (controller != null && callback != null) {
+                synchronized(callbackLock) { callbackControllers[callback] = controller }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "${prefix}Bundle dump failed", e)
+            chain.proceed()
         }
     }
 
-    private fun logString(
-        prefix: String,
-        name: String,
-        type: String,
-        value: String,
-        dumpFully: Boolean
+    private fun hookUnregisterCallback(method: Method) {
+        deoptimize(method)
+        hookHandles += hook(method).intercept { chain ->
+            val result = chain.proceed()
+            synchronized(callbackLock) { callbackControllers.remove(chain.getArg(0)) }
+            result
+        }
+    }
+
+    private fun hookCallbackFallback(method: Method) {
+        deoptimize(method)
+        hookHandles += hook(method).intercept { chain ->
+            val controller = synchronized(callbackLock) {
+                callbackControllers[chain.thisObject]
+            }
+            if (controller != null) {
+                val metadata = chain.getArg(0) as? MediaMetadata
+                publish(controller, metadataOverride = metadata)
+            }
+            chain.proceed()
+        }
+    }
+
+    private fun hookCallbackDestroyed(method: Method) {
+        deoptimize(method)
+        hookHandles += hook(method).intercept { chain ->
+            val controller = synchronized(callbackLock) {
+                callbackControllers[chain.thisObject]
+            }
+            if (controller != null) publish(controller, destroyed = true)
+            chain.proceed()
+        }
+    }
+
+    private fun publishMessage(handler: Any, message: Message) {
+        val callback = findCallback(handler) ?: return
+        val controller = synchronized(callbackLock) { callbackControllers[callback] } ?: return
+        when (message.what) {
+            MSG_UPDATE_PLAYBACK_STATE -> publish(
+                controller,
+                playbackStateOverride = message.obj as? PlaybackState
+            )
+            MSG_UPDATE_METADATA -> publish(
+                controller,
+                metadataOverride = message.obj as? MediaMetadata
+            )
+            MSG_DESTROYED -> publish(controller, destroyed = true)
+        }
+    }
+
+    private fun findCallback(handler: Any): Any? {
+        var current: Class<*>? = handler.javaClass
+        while (current != null) {
+            for (field in current.declaredFields) {
+                runCatching {
+                    field.isAccessible = true
+                    val value = field.get(handler)
+                    if (value != null && synchronized(callbackLock) {
+                            callbackControllers.containsKey(value)
+                        }
+                    ) return value
+                }
+            }
+            current = current.superclass
+        }
+        return null
+    }
+
+    private fun publish(
+        controller: MediaController,
+        metadataOverride: MediaMetadata? = null,
+        playbackStateOverride: PlaybackState? = null,
+        destroyed: Boolean = false
     ) {
-        if (!dumpFully || value.length <= STRING_PREVIEW_LENGTH) {
-            if (value.length > STRING_PREVIEW_LENGTH) {
-                Log.d(TAG, "${prefix}  $name = ${value.take(STRING_PREVIEW_LENGTH)}... (${value.length} chars)")
-            } else {
-                Log.d(TAG, "${prefix}  $name ($type) = $value")
-            }
+        if (!isDebugAppForeground()) return
+        val snapshot = runCatching {
+            MediaSnapshotFactory.fromController(
+                source = DebugContract.SOURCE_SYSTEM_UI,
+                controller = controller,
+                metadataOverride = metadataOverride,
+                playbackStateOverride = playbackStateOverride,
+                destroyed = destroyed
+            )
+        }.getOrElse {
+            Log.w(TAG, "[Snapshot] build failed", it)
             return
         }
-
-        val chunks = value.chunkForLog()
         Log.d(
             TAG,
-            "${prefix}  $name ($type) = <full ${value.length} chars, ${chunks.size} chunks>"
+            "[Snapshot] ${snapshot.packageName} ${snapshot.title} " +
+                "state=${snapshot.playbackState} pos=${snapshot.position}"
         )
-        chunks.forEachIndexed { index, chunk ->
-            Log.d(TAG, "${prefix}    $name[${index + 1}/${chunks.size}] = $chunk")
+        val lyricInfo = snapshot.lyricInfo
+        if (lyricInfo != null) {
+            val lyricChanged = synchronized(callbackLock) {
+                if (loggedLyricInfo[controller] == lyricInfo) {
+                    false
+                } else {
+                    loggedLyricInfo[controller] = lyricInfo
+                    true
+                }
+            }
+            if (lyricChanged) logLyricInfo(lyricInfo)
         }
-        Log.d(TAG, "${prefix}  $name ($type) = </full>")
+        sendSnapshot(snapshot)
+    }
+
+    private fun sendSnapshot(snapshot: com.mediasession.metadata.debug.model.MediaSnapshot) {
+        val context = systemContext() ?: return
+        runCatching {
+            context.sendBroadcast(DebugContract.systemUiSnapshotIntent(snapshot))
+        }.onFailure { Log.w(TAG, "[Snapshot] broadcast failed", it) }
+    }
+
+    private fun isDebugAppForeground(): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (now - cachedForegroundAt < FOREGROUND_CACHE_MS) return cachedForeground
+        synchronized(foregroundLock) {
+            if (now - cachedForegroundAt < FOREGROUND_CACHE_MS) return cachedForeground
+            val foreground = systemContext()
+                ?.getSystemService(ActivityManager::class.java)
+                ?.runningAppProcesses
+                ?.any { process ->
+                    process.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND &&
+                        process.pkgList?.contains(DebugContract.DEBUG_PACKAGE) == true
+                } == true
+            cachedForeground = foreground
+            cachedForegroundAt = now
+            return foreground
+        }
+    }
+
+    @SuppressLint("PrivateApi", "DiscouragedPrivateApi")
+    private fun systemContext(): Context? {
+        cachedSystemContext?.let { return it }
+        synchronized(foregroundLock) {
+            cachedSystemContext?.let { return it }
+            val context = runCatching {
+                val activityThread = Class.forName("android.app.ActivityThread")
+                val application = activityThread.getDeclaredMethod("currentApplication")
+                    .invoke(null) as? Application
+                application?.applicationContext
+            }.onFailure { Log.w(TAG, "[Context] unavailable", it) }.getOrNull()
+            cachedSystemContext = context
+            return context
+        }
+    }
+
+    private fun logLyricInfo(raw: String) {
+        val chunks = raw.chunkForLog()
+        Log.d(TAG, "[LyricInfo] length=${raw.length}, chunks=${chunks.size}")
+        chunks.forEachIndexed { index, chunk ->
+            Log.d(TAG, "[LyricInfo ${index + 1}/${chunks.size}] $chunk")
+        }
     }
 
     private fun String.chunkForLog(): List<String> {
+        if (isEmpty()) return emptyList()
         val chunks = mutableListOf<String>()
         var start = 0
         while (start < length) {
             var end = minOf(start + LOG_CHUNK_LENGTH, length)
-            if (end < length && Character.isHighSurrogate(this[end - 1])) {
-                end--
-            }
-            if (end == start) {
-                end = minOf(start + LOG_CHUNK_LENGTH, length)
-            }
+            if (end < length && Character.isHighSurrogate(this[end - 1])) end--
+            if (end == start) end = minOf(start + LOG_CHUNK_LENGTH, length)
             chunks += substring(start, end)
             start = end
         }
@@ -186,22 +307,22 @@ class HookEntry : XposedModule() {
     }
 
     override fun onHotReloading(param: HotReloadingParam): Boolean {
-        Log.d(TAG, "[HotReload] Preparing...")
         param.setSavedInstanceState(currentPackageReadyParam)
         return true
     }
 
     override fun onHotReloaded(param: HotReloadedParam) {
+        param.oldHookHandles.forEach { it.unhook() }
+        hookHandles.clear()
+        synchronized(callbackLock) {
+            callbackControllers.clear()
+            loggedLyricInfo.clear()
+        }
+        cachedForegroundAt = 0L
         val packageParam = param.savedInstanceState as? PackageReadyParam
         currentPackageReadyParam = packageParam
-
-        param.oldHookHandles.forEach { it.unhook() }
-
-        if (packageParam != null) {
-            Log.d(TAG, "[HotReload] ✓ Reloaded, reinstalling hooks")
-            hookMediaControllerCallback(this, packageParam.classLoader)
-        } else {
-            Log.d(TAG, "[HotReload] ✓ Reloaded (no package context)")
+        if (packageParam?.packageName == DebugContract.SYSTEM_UI_PACKAGE) {
+            installHooks(packageParam.classLoader)
         }
     }
 }

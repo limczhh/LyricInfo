@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Media Session Reader</string>
+    <string name="notification_listener_label">Only used to read media session data</string>
+    <string name="back">Back</string>
+    <string name="page_title_media_session_reader">Media Session Reader</string>
+    <string name="media_sessions">Media sessions</string>
+    <string name="media_session_detail">Media session details</string>
+    <string name="no_sessions">No media sessions are being observed</string>
+    <string name="playing">Playing</string>
+    <string name="paused">Paused</string>
+    <string name="buffering">Buffering</string>
+    <string name="connecting">Connecting</string>
+    <string name="not_playing">Not playing</string>
+    <string name="unknown">Unknown</string>
+    <string name="lyric_info_available">lyricinfo</string>
+    <string name="lyric_info_section">Lyric Info parsing</string>
+    <string name="media_session_section">MediaSession fields</string>
+    <string name="lyrics_section">Full lyrics</string>
+    <string name="lyric_info_empty">Lyric Info was read, but no timed lyrics are available</string>
+    <string name="lyric_info_absent">This session has no Lyric Info</string>
+    <string name="session_ended">This media session has ended; showing the last data</string>
+    <string name="field_song_name">Song name</string>
+    <string name="field_artist">Artist</string>
+    <string name="field_album">Album</string>
+    <string name="field_song_id">Song ID</string>
+    <string name="field_song_mid">Song MID</string>
+    <string name="field_format">Format</string>
+    <string name="field_raw_lyric">Raw lyric</string>
+    <string name="field_translation">Translation</string>
+    <string name="field_roma">Roma</string>
+    <string name="field_package">Package name</string>
+    <string name="field_session_tag">Session tag</string>
+    <string name="field_media_id">Media ID</string>
+    <string name="field_playback_state">Playback state</string>
+    <string name="field_progress">Progress</string>
+    <string name="field_duration">Duration</string>
+    <string name="field_speed">Playback speed</string>
+    <string name="yes">Yes</string>
+    <string name="no">No</string>
+    <string name="work_mode_working">Working</string>
+    <string name="work_mode_not_active">Not active</string>
+    <string name="work_mode_no_permission">Permission not granted</string>
+    <string name="work_mode_lsp">LSPosed module activated</string>
+    <string name="work_mode_notification_listener">Notification listener</string>
+</resources>

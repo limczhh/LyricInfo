@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">媒体会话读取器</string>
+    <string name="notification_listener_label">仅用于读取媒体会话数据</string>
+    <string name="back">返回</string>
+    <string name="page_title_media_session_reader">媒体会话读取器</string>
+    <string name="media_sessions">媒体会话</string>
+    <string name="media_session_detail">媒体会话详情</string>
+    <string name="no_sessions">当前没有监听到媒体会话</string>
+    <string name="lyric_info_available">lyricinfo</string>
+    <string name="playing">播放中</string>
+    <string name="paused">已暂停</string>
+    <string name="buffering">缓冲中</string>
+    <string name="connecting">连接中</string>
+    <string name="not_playing">未播放</string>
+    <string name="unknown">未知</string>
+    <string name="lyric_info_section">Lyric Info 解析</string>
+    <string name="media_session_section">MediaSession 字段</string>
+    <string name="lyrics_section">整首歌词</string>
+    <string name="lyric_info_empty">已读取 Lyric Info，但没有可显示的定时歌词</string>
+    <string name="lyric_info_absent">当前会话没有 Lyric Info</string>
+    <string name="session_ended">该媒体会话已结束，显示最后一次数据</string>
+    <string name="field_song_name">Song name</string>
+    <string name="field_artist">Artist</string>
+    <string name="field_album">Album</string>
+    <string name="field_song_id">Song ID</string>
+    <string name="field_song_mid">Song MID</string>
+    <string name="field_format">Format</string>
+    <string name="field_raw_lyric">Raw lyric</string>
+    <string name="field_translation">Translation</string>
+    <string name="field_roma">Roma</string>
+    <string name="field_package">Package name</string>
+    <string name="field_session_tag">Session tag</string>
+    <string name="field_media_id">Media ID</string>
+    <string name="field_playback_state">Playback state</string>
+    <string name="field_progress">Progress</string>
+    <string name="field_duration">Duration</string>
+    <string name="field_speed">Playback speed</string>
+    <string name="yes">Yes</string>
+    <string name="no">No</string>
+    <string name="work_mode_working">工作中</string>
+    <string name="work_mode_not_active">未激活</string>
+    <string name="work_mode_no_permission">未授予权限</string>
+    <string name="work_mode_lsp">LSPosed 模块已激活</string>
+    <string name="work_mode_notification_listener">通知监听</string>
+</resources>

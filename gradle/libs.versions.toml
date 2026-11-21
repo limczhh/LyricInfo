@@ -3,12 +3,32 @@ agp = "9.2.1"
 xposed-api = "102.0.0"
 xposed-service = "102.0.0"
 dexkit = "2.2.0"
+kotlin-compose = "2.3.21"
+compose-bom = "2026.11.01"
+activity-compose = "1.12.4"
+miuix = "0.9.5-beta03"
+kotlinx-serialization = "1.9.0"
 
 [plugins]
 agp-app = { id = "com.android.application", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin-compose" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin-compose" }
 
 [libraries]
 libxposed-api = { group = "io.github.libxposed", name = "api", version.ref = "xposed-api" }
 libxposed-service = { group = "io.github.libxposed", name = "service", version.ref = "xposed-service" }
 dexkit = { group = "org.luckypray", name = "dexkit", version.ref = "dexkit" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity-compose" }
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "compose-bom" }
+androidx-compose-foundation = { group = "androidx.compose.foundation", name = "foundation" }
+androidx-compose-runtime = { group = "androidx.compose.runtime", name = "runtime" }
+androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+miuix-ui-android = { group = "top.yukonga.miuix.kmp", name = "miuix-ui-android", version.ref = "miuix" }
+miuix-blur-android = { group = "top.yukonga.miuix.kmp", name = "miuix-blur-android", version.ref = "miuix" }
+miuix-glass-android = { group = "top.yukonga.miuix.kmp", name = "miuix-glass-android", version.ref = "miuix" }
+miuix-icons-android = { group = "top.yukonga.miuix.kmp", name = "miuix-icons-android", version.ref = "miuix" }
+miuix-nav-android = { group = "top.yukonga.miuix.kmp", name = "miuix-nav-android", version.ref = "miuix" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 
