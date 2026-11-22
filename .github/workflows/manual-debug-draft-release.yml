@@ -1,0 +1,277 @@
+name: Manual APK Draft Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_debug:
+        description: '构建 :debug 模块（Debug）'
+        required: false
+        default: true
+        type: boolean
+      build_app:
+        description: '构建 app 模块（Release）'
+        required: false
+        default: false
+        type: boolean
+      build_lite:
+        description: '构建 lite 模块（Release）'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  packages: read
+
+concurrency:
+  group: manual-apk-draft-release
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    name: Build Selected APKs and Draft Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 拉取代码 Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: 检查发布分支 Check Release Branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_NAME" != "main" ]]; then
+            echo "::error::Draft Release 只能从 main 分支运行，当前分支为 $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+      - name: 检查构建选择 Check Build Selection
+        id: selection
+        env:
+          BUILD_DEBUG: ${{ inputs.build_debug }}
+          BUILD_APP: ${{ inputs.build_app }}
+          BUILD_LITE: ${{ inputs.build_lite }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GRADLE_TASKS=()
+          SELECTED_MODULES=()
+
+          if [[ "$BUILD_DEBUG" == "true" ]]; then
+            GRADLE_TASKS+=(":debug:assembleDebug")
+            SELECTED_MODULES+=("debug")
+          fi
+          if [[ "$BUILD_APP" == "true" ]]; then
+            GRADLE_TASKS+=(":app:assembleRelease")
+            SELECTED_MODULES+=("app")
+          fi
+          if [[ "$BUILD_LITE" == "true" ]]; then
+            GRADLE_TASKS+=(":lite:assembleRelease")
+            SELECTED_MODULES+=("lite")
+          fi
+
+          if [[ "${#SELECTED_MODULES[@]}" -eq 0 ]]; then
+            echo "::error::至少选择一个构建模块"
+            exit 1
+          fi
+
+          SELECTION_SLUG="${SELECTED_MODULES[*]}"
+          SELECTION_SLUG="${SELECTION_SLUG// /-}"
+          {
+            echo "gradle_tasks=${GRADLE_TASKS[*]}"
+            echo "selected_modules=${SELECTED_MODULES[*]}"
+            echo "selection_slug=$SELECTION_SLUG"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "构建模块: ${SELECTED_MODULES[*]}"
+          echo "Gradle tasks: ${GRADLE_TASKS[*]}"
+
+      - name: 安装 JDK Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: 安装 Android SDK Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platforms;android-37.0 build-tools;37.0.0 platform-tools'
+
+      - name: 配置 Gradle Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: wrapper
+          cache-read-only: false
+
+      - name: 授权 Gradle 脚本 Grant Permission
+        run: chmod +x ./gradlew
+
+      - name: 检查签名 Secrets Check Signing Secrets
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          STORE_PASS: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_PASS: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ALIAS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in SIGNING_KEY STORE_PASS KEY_PASS KEY_ALIAS; do
+            if [[ -z "${!required:-}" ]]; then
+              echo "::error::缺少 $required secret"
+              exit 1
+            fi
+          done
+
+      - name: 构建选中的 APK Build Selected APKs
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GRADLE_TASKS: ${{ steps.selection.outputs.gradle_tasks }}
+        run: ./gradlew $GRADLE_TASKS --build-cache
+
+      - name: 读取版本并整理 APK Read Metadata
+        id: metadata
+        env:
+          BUILD_DEBUG: ${{ inputs.build_debug }}
+          BUILD_APP: ${{ inputs.build_app }}
+          BUILD_LITE: ${{ inputs.build_lite }}
+          SELECTION_SLUG: ${{ steps.selection.outputs.selection_slug }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION_CODE="$(git rev-list --count HEAD)"
+          SHORT_SHA="$(git rev-parse --short=7 HEAD)"
+          VERSION_TAG="manual-${SELECTION_SLUG}-${VERSION_CODE}-${SHORT_SHA}"
+          MANIFEST="apk-manifest.tsv"
+          : > "$MANIFEST"
+          mkdir -p release-assets
+
+          if EXISTING_TAG_COMMIT="$(git rev-parse -q --verify "refs/tags/${VERSION_TAG}^{commit}" 2>/dev/null)"; then
+            if [[ "$EXISTING_TAG_COMMIT" != "$GITHUB_SHA" ]]; then
+              echo "::error::tag $VERSION_TAG 已经指向其他 commit: $EXISTING_TAG_COMMIT"
+              exit 1
+            fi
+            echo "tag $VERSION_TAG 已经指向当前 commit，允许安全重试"
+          fi
+
+          for module in debug app lite; do
+            selected=false
+            case "$module" in
+              debug)
+                if [[ "$BUILD_DEBUG" == "true" ]]; then selected=true; fi
+                ;;
+              app)
+                if [[ "$BUILD_APP" == "true" ]]; then selected=true; fi
+                ;;
+              lite)
+                if [[ "$BUILD_LITE" == "true" ]]; then selected=true; fi
+                ;;
+            esac
+
+            if [[ "$selected" != "true" ]]; then
+              continue
+            fi
+
+            case "$module" in
+              debug) apk_dir="debug/build/outputs/apk/debug" ;;
+              app|lite) apk_dir="$module/build/outputs/apk/release" ;;
+            esac
+            mapfile -t apk_files < <(find "$apk_dir" -maxdepth 1 -type f -name '*.apk' -print | sort)
+            if [[ "${#apk_files[@]}" -ne 1 ]]; then
+              echo "::error::$module 模块的 APK 数量不是 1，实际为 ${#apk_files[@]}"
+              printf '%s\n' "${apk_files[@]}"
+              exit 1
+            fi
+
+            apk_in="${apk_files[0]}"
+            apk_out="release-assets/LyricInfo-${module}-${VERSION_CODE}-${SHORT_SHA}.apk"
+            printf '%s\t%s\t%s\n' "$module" "$apk_in" "$apk_out" >> "$MANIFEST"
+            echo "$module APK: $apk_in -> $apk_out"
+          done
+
+          {
+            echo "version_code=$VERSION_CODE"
+            echo "short_sha=$SHORT_SHA"
+            echo "tag=$VERSION_TAG"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 对齐、签名并校验 APK Sign and Verify APKs
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          STORE_PASS: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_PASS: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ALIAS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+
+          BTDIR="$ANDROID_SDK_ROOT/build-tools/37.0.0"
+          ZIPALIGN="$BTDIR/zipalign"
+          APKSIGNER="$BTDIR/apksigner"
+          KEYSTORE_PATH="$RUNNER_TEMP/lyricinfo-release.jks"
+
+          printf '%s' "$SIGNING_KEY" | base64 --decode > "$KEYSTORE_PATH"
+
+          while IFS=$'\t' read -r module apk_in apk_out; do
+            [[ -z "$module" ]] && continue
+            apk_aligned="$RUNNER_TEMP/lyricinfo-${module}-aligned.apk"
+
+            "$ZIPALIGN" -f -p 4 \
+              "$GITHUB_WORKSPACE/$apk_in" \
+              "$apk_aligned"
+            "$APKSIGNER" sign \
+              --ks "$KEYSTORE_PATH" \
+              --ks-pass env:STORE_PASS \
+              --ks-key-alias "$KEY_ALIAS" \
+              --key-pass env:KEY_PASS \
+              --out "$GITHUB_WORKSPACE/$apk_out" \
+              "$apk_aligned"
+            "$APKSIGNER" verify --verbose "$GITHUB_WORKSPACE/$apk_out"
+          done < apk-manifest.tsv
+
+      - name: 生成 Draft Release 说明 Generate Release Notes
+        env:
+          SELECTED_MODULES: ${{ steps.selection.outputs.selected_modules }}
+          VERSION_CODE: ${{ steps.metadata.outputs.version_code }}
+          SHORT_SHA: ${{ steps.metadata.outputs.short_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo "## LyricInfo APK 发布包"
+            echo
+            echo "- 构建模块: $SELECTED_MODULES"
+            echo "- versionCode: $VERSION_CODE"
+            echo "- commit: $SHORT_SHA"
+            echo
+            echo "## 更新内容"
+            git log --no-merges -n 30 HEAD --pretty=format:'- %s (%h)' -- \
+              app lite debug build.gradle.kts settings.gradle.kts gradle.properties gradle gradlew gradlew.bat
+          } > release-body.md
+
+      - name: 创建 Draft Release Create Draft Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.metadata.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: LyricInfo ${{ steps.metadata.outputs.tag }}
+          body_path: release-body.md
+          draft: true
+          prerelease: false
+          generate_release_notes: false
+          files: release-assets/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 清理临时签名文件 Cleanup Signing Files
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$RUNNER_TEMP/lyricinfo-release.jks"
+          rm -f "$RUNNER_TEMP"/lyricinfo-*-aligned.apk
