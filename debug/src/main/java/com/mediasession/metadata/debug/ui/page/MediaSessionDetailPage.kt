@@ -34,7 +34,7 @@ import top.yukonga.miuix.kmp.glass.GlassIconButton
 import top.yukonga.miuix.kmp.glass.GlassTabRow
 import top.yukonga.miuix.kmp.glass.GlassTabRowDefaults
 import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.extended.Back
+import top.yukonga.miuix.kmp.icon.glass.ChevronBackward
 
 @Composable
 fun MediaSessionDetailPage(sessionKey: String, onBack: () -> Unit) {
@@ -107,16 +107,13 @@ fun MediaSessionDetailPage(sessionKey: String, onBack: () -> Unit) {
                 navigationIcon = {
                     GlassIconButton(onClick = onBack) {
                         Icon(
-                            imageVector = MiuixIcons.Back,
+                            imageVector = MiuixIcons.Glass.ChevronBackward,
                             contentDescription = stringResource(R.string.back)
                         )
                     }
                 },
                 bottomContent = {
                     if (hasLyricInfo) {
-                        val tabColors = GlassTabRowDefaults.neutralColors().copy(
-                            restingStrokeAlpha = 1f
-                        )
                         GlassTabRow(
                             tabs = listOf(
                                 stringResource(R.string.tab_metadata),
@@ -126,8 +123,7 @@ fun MediaSessionDetailPage(sessionKey: String, onBack: () -> Unit) {
                             onSelect = { selectedTabIndex = it },
                             backdrop = null,
                             height = GlassTabRowDefaults.NeutralHeight,
-                            surfaceAlpha = 0f,
-                            colors = tabColors,
+                            colors = GlassTabRowDefaults.neutralColors(),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 12.dp)
