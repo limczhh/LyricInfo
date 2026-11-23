@@ -9,6 +9,15 @@
     <string name="lyric_info_available">lyricinfo</string>
     <string name="tab_metadata">元数据</string>
     <string name="tab_lyrics">歌词</string>
+    <plurals name="lyrics_line_count">
+        <item quantity="one">共 %1$d 行</item>
+        <item quantity="other">共 %1$d 行</item>
+    </plurals>
+    <string name="full_lyrics_title">全量歌词</string>
+    <string name="full_lyrics_expand">展开全量歌词</string>
+    <string name="full_lyrics_collapse">收起全量歌词</string>
+    <string name="current_lyric_line">第 %1$d 行</string>
+    <string name="current_lyric_no_line">暂无对应歌词</string>
     <string name="playing">播放中</string>
     <string name="paused">已暂停</string>
     <string name="buffering">缓冲中</string>

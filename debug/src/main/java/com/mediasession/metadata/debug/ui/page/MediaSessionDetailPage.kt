@@ -11,17 +11,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.mediasession.metadata.debug.R
+import com.mediasession.metadata.debug.business.DebugPreferences
 import com.mediasession.metadata.debug.business.LyricInfoParser
 import com.mediasession.metadata.debug.business.MediaSessionRepository
 import kotlinx.coroutines.launch
@@ -38,18 +39,21 @@ import top.yukonga.miuix.kmp.icon.glass.ChevronBackward
 
 @Composable
 fun MediaSessionDetailPage(sessionKey: String, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val persistedTabIndex = remember(context) {
+        DebugPreferences.lastSelectedDetailTab(context)
+    }
     var record by remember(sessionKey) {
         mutableStateOf(MediaSessionRepository.find(sessionKey))
     }
-    var selectedTabIndex by remember(sessionKey, record?.hasLyricInfo()) {
-        mutableIntStateOf(0)
+    var selectedTabIndex by rememberSaveable(sessionKey) {
+        mutableIntStateOf(persistedTabIndex)
     }
     val metadataListState = rememberLazyListState()
     val lyricsListState = rememberLazyListState()
     val scrollBehavior = MiuixScrollBehavior()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
-    val context = LocalContext.current
     val detailTitle = stringResource(R.string.page_title_media_session_metadata)
     val copySuccessMessage = stringResource(R.string.copy_success)
     val hasLyricInfo = record?.hasLyricInfo() == true
@@ -91,10 +95,6 @@ fun MediaSessionDetailPage(sessionKey: String, onBack: () -> Unit) {
         onDispose { remove() }
     }
 
-    LaunchedEffect(hasLyricInfo) {
-        if (!hasLyricInfo) selectedTabIndex = 0
-    }
-
     Scaffold(
         snackbarHost = {
             SnackbarHost(state = snackbarHostState)
@@ -120,7 +120,10 @@ fun MediaSessionDetailPage(sessionKey: String, onBack: () -> Unit) {
                                 stringResource(R.string.tab_lyrics)
                             ),
                             selectedIndex = selectedTabIndex,
-                            onSelect = { selectedTabIndex = it },
+                            onSelect = { index ->
+                                selectedTabIndex = index
+                                DebugPreferences.setLastSelectedDetailTab(context, index)
+                            },
                             backdrop = null,
                             height = GlassTabRowDefaults.NeutralHeight,
                             colors = GlassTabRowDefaults.neutralColors(),

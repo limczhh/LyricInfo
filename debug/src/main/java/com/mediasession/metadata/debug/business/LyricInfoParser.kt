@@ -54,7 +54,8 @@ object LyricInfoParser {
         val anchor: Long,
         val begin: Long,
         val text: String,
-        val words: List<LyricWord> = emptyList()
+        val words: List<LyricWord> = emptyList(),
+        val end: Long = begin + 5000L
     )
 
     fun parse(
@@ -200,7 +201,7 @@ object LyricInfoParser {
                 if (queue.isEmpty()) null else queue.removeFirst()
             }
             LyricLine(
-                begin = original.begin,
+                begin = original.anchor,
                 end = original.endForDisplay(),
                 text = original.text,
                 words = original.words,
@@ -283,19 +284,18 @@ object LyricInfoParser {
     private fun completeLineTiming(lines: MutableList<ParsedLine>) {
         for (index in lines.indices) {
             val current = lines[index]
-            val nextBegin = lines.getOrNull(index + 1)?.begin
-            val end = nextBegin?.takeIf { it > current.begin } ?: (current.begin + 5000L)
+            val nextAnchor = lines.getOrNull(index + 1)?.anchor
+            val end = nextAnchor?.takeIf { it > current.anchor } ?: (current.anchor + 5000L)
             val words = current.words.mapIndexed { wordIndex, word ->
                 val nextWord = current.words.getOrNull(wordIndex + 1)?.begin
                 word.copy(end = nextWord ?: maxOf(word.end, end))
             }
-            lines[index] = current.copy(words = words)
+            lines[index] = current.copy(words = words, end = end)
         }
     }
 
     private fun ParsedLine.endForDisplay(): Long {
-        return words.lastOrNull()?.end?.coerceAtLeast(begin + 1L)
-            ?: (begin + 5000L)
+        return words.lastOrNull()?.end?.coerceAtLeast(end) ?: end
     }
 
     private fun parseTime(match: MatchResult): Long {

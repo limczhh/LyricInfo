@@ -15,6 +15,15 @@
     <string name="lyric_info_available">lyricinfo</string>
     <string name="tab_metadata">Metadata</string>
     <string name="tab_lyrics">Lyrics</string>
+    <plurals name="lyrics_line_count">
+        <item quantity="one">%1$d line</item>
+        <item quantity="other">%1$d lines</item>
+    </plurals>
+    <string name="full_lyrics_title">Full lyrics</string>
+    <string name="full_lyrics_expand">Expand full lyrics</string>
+    <string name="full_lyrics_collapse">Collapse full lyrics</string>
+    <string name="current_lyric_line">Line %1$d</string>
+    <string name="current_lyric_no_line">No matching lyric</string>
     <string name="lyricinfo_section">lyricinfo</string>
     <string name="metadata_section">metadata</string>
     <string name="copy_success">Copied</string>

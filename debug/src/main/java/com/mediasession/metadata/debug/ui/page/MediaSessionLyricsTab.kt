@@ -2,53 +2,81 @@ package com.mediasession.metadata.debug.ui.page
 
 import android.media.session.PlaybackState
 import android.os.SystemClock
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.unit.sp
 import com.mediasession.metadata.debug.R
 import com.mediasession.metadata.debug.model.LyricInfoDocument
 import com.mediasession.metadata.debug.model.LyricLine
+import com.mediasession.metadata.debug.model.LyricWord
 import com.mediasession.metadata.debug.model.MediaSessionRecord
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.isActive
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CardDefaults
+import top.yukonga.miuix.kmp.basic.HorizontalDivider
+import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.LinearProgressIndicator
 import top.yukonga.miuix.kmp.basic.ScrollBehavior
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.glass.CollapseList
+import top.yukonga.miuix.kmp.icon.glass.ExpandList
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import java.util.Locale
 
-private const val LYRIC_ITEM_OFFSET = 1
+private val CardHorizontalPadding = 12.dp
+private val CardBottomPadding = 12.dp
+private val LyricLineHorizontalPadding = 16.dp
+private val CurrentLyricWordsMaxHeight = 160.dp
+private val FullLyricsCardHeight = 200.dp
 
 @Composable
 fun MediaSessionLyricsTab(
@@ -60,8 +88,6 @@ fun MediaSessionLyricsTab(
     bottomPadding: androidx.compose.ui.unit.Dp
 ) {
     var clock by remember(record?.key) { mutableLongStateOf(SystemClock.elapsedRealtime()) }
-    var autoScrolling by remember { mutableStateOf(false) }
-    var userScrolling by remember { mutableStateOf(false) }
 
     LaunchedEffect(record?.key, record?.playbackState, record?.positionUpdateTime, record?.playbackSpeed) {
         clock = SystemClock.elapsedRealtime()
@@ -72,38 +98,16 @@ fun MediaSessionLyricsTab(
         }
     }
 
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress }
-            .distinctUntilChanged()
-            .collectLatest { scrolling ->
-                if (scrolling && !autoScrolling) userScrolling = true
-                if (!scrolling) userScrolling = false
-            }
-    }
-
     val position = record?.positionAt(clock) ?: 0L
     val lines = parsed?.lines.orEmpty()
     val activeLineIndex = remember(lines, position) {
         lines.indexOfLast { it.begin <= position }
     }
+    val activeLine = lines.getOrNull(activeLineIndex)
     val activeWordIndex = remember(lines, activeLineIndex, position) {
-        lines.getOrNull(activeLineIndex)?.words
+        activeLine?.words
             ?.indexOfFirst { position >= it.begin && position < it.end }
             ?: -1
-    }
-
-    LaunchedEffect(record?.key, activeLineIndex, lines.size) {
-        if (activeLineIndex >= 0 && !userScrolling) {
-            autoScrolling = true
-            try {
-                listState.animateScrollToItem(
-                    index = LYRIC_ITEM_OFFSET + activeLineIndex,
-                    scrollOffset = -120
-                )
-            } finally {
-                autoScrolling = false
-            }
-        }
     }
 
     LazyColumn(
@@ -113,21 +117,29 @@ fun MediaSessionLyricsTab(
             .nestedScroll(scrollBehavior.nestedScrollConnection),
         contentPadding = PaddingValues(
             top = topPadding + 12.dp,
-            bottom = bottomPadding + 120.dp
+            bottom = bottomPadding + 24.dp
         ),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
+        verticalArrangement = Arrangement.spacedBy(0.dp)
     ) {
         item(key = "lyrics-summary") {
-            LyricsSummaryCard(record = record, parsed = parsed, position = position)
+            LyricsSummaryCard(
+                record = record,
+                parsed = parsed,
+                lineCount = lines.size,
+                position = position
+            )
         }
-        itemsIndexed(
-            items = lines,
-            key = { index, line -> "lyric-${line.begin}-$index" }
-        ) { index, line ->
-            LyricLineItem(
-                line = line,
-                active = index == activeLineIndex,
-                activeWordIndex = if (index == activeLineIndex) activeWordIndex else -1
+        item(key = "current-lyric-detail") {
+            CurrentLyricDetailCard(
+                line = activeLine,
+                lineIndex = activeLineIndex,
+                activeWordIndex = activeWordIndex
+            )
+        }
+        item(key = "full-lyrics") {
+            FullLyricsCard(
+                lines = lines,
+                activeLineIndex = activeLineIndex
             )
         }
         if (record?.ended == true) {
@@ -146,15 +158,16 @@ fun MediaSessionLyricsTab(
 private fun LyricsSummaryCard(
     record: MediaSessionRecord?,
     parsed: LyricInfoDocument?,
+    lineCount: Int,
     position: Long
 ) {
-    val title = parsed?.songName?.ifBlank { record?.title.orEmpty() }
-        ?.ifBlank { stringResource(R.string.unknown) }
-        ?: stringResource(R.string.unknown)
-    val summary = listOf(
-        parsed?.artist?.ifBlank { record?.artist.orEmpty() }.orEmpty(),
-        parsed?.album?.ifBlank { record?.album.orEmpty() }.orEmpty()
-    ).filter { it.isNotBlank() }.joinToString(" - ")
+    val songTitle = parsed.lyricInfoValue("songName")
+        .ifBlank { stringResource(R.string.unknown) }
+    val artistAlbum = listOf(
+        parsed.lyricInfoValue("artist"),
+        parsed.lyricInfoValue("album")
+    ).filter { it.isNotBlank() }
+        .joinToString(" - ")
         .ifBlank { stringResource(R.string.unknown) }
     val progress = if ((record?.duration ?: 0L) > 0L) {
         (position.toFloat() / record!!.duration.toFloat()).coerceIn(0f, 1f)
@@ -164,17 +177,22 @@ private fun LyricsSummaryCard(
 
     Card(
         modifier = Modifier
-            .padding(horizontal = 12.dp)
-            .padding(bottom = 18.dp)
-            .fillMaxWidth()
+            .padding(horizontal = CardHorizontalPadding)
+            .padding(bottom = CardBottomPadding)
+            .fillMaxWidth(),
+        colors = CardDefaults.defaultColors()
     ) {
         BasicComponent(
-            title = title,
-            summary = summary,
+            title = songTitle,
+            summary = artistAlbum,
             endActions = {
                 Text(
-                    text = playbackStateText(record?.playbackState ?: PlaybackState.STATE_NONE),
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    text = pluralStringResource(
+                        R.plurals.lyrics_line_count,
+                        lineCount,
+                        lineCount
+                    ),
+                    color = MiuixTheme.colorScheme.onSurfaceVariantActions,
                     style = MiuixTheme.textStyles.footnote1
                 )
             },
@@ -195,6 +213,13 @@ private fun LyricsSummaryCard(
                             modifier = Modifier.weight(1f)
                         )
                         Text(
+                            text = playbackStateText(record?.playbackState ?: PlaybackState.STATE_NONE),
+                            color = MiuixTheme.colorScheme.onSurface,
+                            style = MiuixTheme.textStyles.footnote1,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
                             text = formatDuration(record?.duration ?: 0L),
                             color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                             style = MiuixTheme.textStyles.footnote1,
@@ -208,79 +233,354 @@ private fun LyricsSummaryCard(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun LyricLineItem(line: LyricLine, active: Boolean, activeWordIndex: Int) {
-    val lineColor = if (active) {
-        MiuixTheme.colorScheme.onSurface
-    } else {
-        MiuixTheme.colorScheme.onSurfaceVariantSummary
-    }
-    Column(
+private fun CurrentLyricDetailCard(
+    line: LyricLine?,
+    lineIndex: Int,
+    activeWordIndex: Int
+) {
+    val wordScrollState = rememberScrollState()
+    Card(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .padding(horizontal = CardHorizontalPadding)
+            .padding(bottom = CardBottomPadding)
+            .fillMaxWidth(),
+        colors = CardDefaults.defaultColors()
     ) {
-        if (line.words.isEmpty()) {
-            Text(
-                text = line.text,
-                style = lyricTextStyle(active),
-                color = if (active) MiuixTheme.colorScheme.primary else lineColor,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
-        } else {
-            Text(
-                text = buildWordText(line, activeWordIndex, lineColor),
-                style = lyricTextStyle(active),
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
+        BasicComponent(
+            title = line?.text ?: stringResource(R.string.current_lyric_no_line),
+            summary = if (line != null) {
+                "${formatLyricTimestamp(line.begin)}  —  ${formatLyricTimestamp(line.end)}"
+            } else {
+                null
+            },
+            endActions = lineIndex.takeIf { it >= 0 }?.let { index ->
+                {
+                    Text(
+                        text = stringResource(R.string.current_lyric_line, index + 1),
+                        style = MiuixTheme.textStyles.footnote1,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantActions
+                    )
+                }
+            }
+        )
+
+        val hasWordTiming = !line?.words.isNullOrEmpty()
+        val hasSupplementalLyrics = line?.translation?.isNotBlank() == true ||
+            line?.roma?.isNotBlank() == true
+        if (line != null && (hasWordTiming || hasSupplementalLyrics)) {
+            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            BasicComponent {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (hasWordTiming) {
+                                Modifier
+                                    .heightIn(max = CurrentLyricWordsMaxHeight)
+                                    .verticalScroll(wordScrollState)
+                            } else {
+                                Modifier
+                            }
+                        )
+                ) {
+                    if (hasWordTiming) {
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            line.words.forEachIndexed { index, word ->
+                                CurrentLyricWord(
+                                    word = word,
+                                    active = index == activeWordIndex
+                                )
+                            }
+                        }
+                    }
+
+                    line.translation?.takeIf { it.isNotBlank() }?.let { translation ->
+                        LyricSupplementalLine(
+                            text = translation,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                            modifier = Modifier.padding(top = if (hasWordTiming) 12.dp else 0.dp)
+                        )
+                    }
+                    line.roma?.takeIf { it.isNotBlank() }?.let { roma ->
+                        LyricSupplementalLine(
+                            text = roma,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+            }
         }
-        line.translation?.takeIf { it.isNotBlank() }?.let { translation ->
+    }
+}
+
+@Composable
+private fun CurrentLyricWord(word: LyricWord, active: Boolean) {
+    val borderColor = if (active) {
+        MiuixTheme.colorScheme.primary
+    } else {
+        MiuixTheme.colorScheme.outline.copy(alpha = 0.7f)
+    }
+    val durationBackground = if (active) {
+        MiuixTheme.colorScheme.primary.copy(alpha = 0.14f)
+    } else {
+        MiuixTheme.colorScheme.surfaceContainer
+    }
+
+    Box(
+        modifier = Modifier
+            .background(durationBackground, RoundedCornerShape(5.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(5.dp))
+            .padding(horizontal = 5.dp, vertical = 3.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                text = translation,
-                style = MiuixTheme.textStyles.body2,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 4.dp)
+                text = formatWordDuration(word.end - word.begin),
+                style = MiuixTheme.textStyles.footnote2.copy(fontSize = 10.sp),
+                color = if (active) {
+                    MiuixTheme.colorScheme.primary
+                } else {
+                    MiuixTheme.colorScheme.onSurfaceVariantActions
+                }
             )
-        }
-        line.roma?.takeIf { it.isNotBlank() }?.let { roma ->
+            Spacer(modifier = Modifier.height(1.dp))
             Text(
-                text = roma,
-                style = MiuixTheme.textStyles.body2,
-                color = MiuixTheme.colorScheme.onSurfaceVariantActions,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 2.dp)
+                text = word.text,
+                style = MiuixTheme.textStyles.footnote1,
+                color = if (active) {
+                    MiuixTheme.colorScheme.primary
+                } else {
+                    MiuixTheme.colorScheme.onSurface
+                }
             )
         }
     }
 }
 
 @Composable
-private fun lyricTextStyle(active: Boolean): TextStyle = MiuixTheme.textStyles.body1.copy(
-    fontWeight = if (active) FontWeight.Bold else FontWeight.Normal
-)
+private fun FullLyricsCard(
+    lines: List<LyricLine>,
+    activeLineIndex: Int
+) {
+    val lyricsListState = rememberLazyListState()
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    var autoScrolling by remember { mutableStateOf(false) }
+    var userScrolling by remember { mutableStateOf(false) }
+    var wasExpanded by remember { mutableStateOf(false) }
+    var previousActiveLineIndex by remember { mutableStateOf<Int?>(null) }
+    val isolatedNestedScrollConnection = remember {
+        object : NestedScrollConnection {
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset = Offset(x = 0f, y = available.y)
+
+            override suspend fun onPostFling(
+                consumed: Velocity,
+                available: Velocity
+            ): Velocity = Velocity(x = 0f, y = available.y)
+        }
+    }
+    val baseModifier = Modifier
+        .padding(horizontal = CardHorizontalPadding)
+        .padding(bottom = CardBottomPadding)
+        .fillMaxWidth()
+    val contentVerticalPadding = (FullLyricsCardHeight / 2 - 40.dp).coerceAtLeast(24.dp)
+
+    LaunchedEffect(lyricsListState) {
+        snapshotFlow { lyricsListState.isScrollInProgress }
+            .distinctUntilChanged()
+            .collectLatest { scrolling ->
+                if (scrolling && !autoScrolling) userScrolling = true
+                if (!scrolling) userScrolling = false
+            }
+    }
+
+    LaunchedEffect(expanded, lines, activeLineIndex) {
+        val shouldCenter = expanded && (
+            !wasExpanded ||
+                (previousActiveLineIndex != null && previousActiveLineIndex != activeLineIndex)
+            )
+        wasExpanded = expanded
+        previousActiveLineIndex = activeLineIndex
+        if (
+            !shouldCenter ||
+            activeLineIndex < 0 ||
+            userScrolling
+        ) return@LaunchedEffect
+
+        autoScrolling = true
+        try {
+            lyricsListState.animateItemToCenter(activeLineIndex)
+        } finally {
+            autoScrolling = false
+        }
+    }
+
+    Card(
+        modifier = if (expanded) baseModifier.height(FullLyricsCardHeight) else baseModifier,
+        colors = CardDefaults.defaultColors()
+    ) {
+        BasicComponent(
+            title = stringResource(R.string.full_lyrics_title),
+            onClick = { expanded = !expanded },
+            onClickLabel = stringResource(
+                if (expanded) R.string.full_lyrics_collapse else R.string.full_lyrics_expand
+            ),
+            role = Role.Button,
+            endActions = {
+                Icon(
+                    imageVector = if (expanded) {
+                        MiuixIcons.Glass.CollapseList
+                    } else {
+                        MiuixIcons.Glass.ExpandList
+                    },
+                    contentDescription = stringResource(
+                        if (expanded) R.string.full_lyrics_collapse else R.string.full_lyrics_expand
+                    )
+                )
+            }
+        )
+
+        if (expanded) {
+            HorizontalDivider()
+            LazyColumn(
+                state = lyricsListState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .nestedScroll(isolatedNestedScrollConnection),
+                contentPadding = PaddingValues(vertical = contentVerticalPadding),
+                verticalArrangement = Arrangement.spacedBy(0.dp)
+            ) {
+                itemsIndexed(
+                    items = lines,
+                    key = { index, line -> "full-lyric-${line.begin}-$index" }
+                ) { index, line ->
+                    LyricLineItem(
+                        line = line,
+                        active = index == activeLineIndex,
+                        adjacentToActive = activeLineIndex >= 0 &&
+                            kotlin.math.abs(index - activeLineIndex) == 1
+                    )
+                }
+            }
+        }
+    }
+}
 
 @Composable
-private fun buildWordText(
+private fun LyricLineItem(
     line: LyricLine,
-    activeWordIndex: Int,
-    defaultColor: Color
-): AnnotatedString = buildAnnotatedString {
-    line.words.forEachIndexed { index, word ->
-        val color = if (index == activeWordIndex) {
-            MiuixTheme.colorScheme.primary
-        } else {
-            defaultColor
-        }
-        withStyle(SpanStyle(color = color)) { append(word.text) }
+    active: Boolean,
+    adjacentToActive: Boolean
+) {
+    val mainStyle = if (active) {
+        MiuixTheme.textStyles.body1.copy(fontWeight = FontWeight.SemiBold)
+    } else {
+        MiuixTheme.textStyles.body1
     }
+    val mainColor = if (active) {
+        MiuixTheme.colorScheme.primary
+    } else {
+        MiuixTheme.colorScheme.onSurface
+    }
+    val timingColor = if (active) {
+        MiuixTheme.colorScheme.primary.copy(alpha = 0.78f)
+    } else {
+        MiuixTheme.colorScheme.onSurfaceVariantActions
+    }
+    val lineVerticalPadding = if (active || adjacentToActive) 12.dp else 8.dp
+    val inlineSpacing = 4.dp
+    val supplementalSpacing = if (active) 8.dp else 6.dp
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                horizontal = LyricLineHorizontalPadding,
+                vertical = lineVerticalPadding
+            ),
+        horizontalAlignment = Alignment.Start
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = formatLyricTimestamp(line.begin),
+                style = MiuixTheme.textStyles.footnote2,
+                color = timingColor
+            )
+            Text(
+                text = "  —  ",
+                style = MiuixTheme.textStyles.footnote2,
+                color = timingColor
+            )
+            Text(
+                text = formatLyricTimestamp(line.end),
+                style = MiuixTheme.textStyles.footnote2,
+                color = timingColor
+            )
+        }
+
+        Spacer(modifier = Modifier.height(inlineSpacing))
+        Text(
+            text = line.text,
+            style = mainStyle,
+            color = mainColor,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        line.translation?.takeIf { it.isNotBlank() }?.let { translation ->
+            LyricSupplementalLine(
+                text = translation,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(top = supplementalSpacing)
+            )
+        }
+        line.roma?.takeIf { it.isNotBlank() }?.let { roma ->
+            LyricSupplementalLine(
+                text = roma,
+                color = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+        }
+    }
+}
+
+private suspend fun LazyListState.animateItemToCenter(index: Int) {
+    if (layoutInfo.visibleItemsInfo.none { it.index == index }) {
+        animateScrollToItem(index)
+        withFrameNanos { }
+    }
+    val item = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index } ?: return
+    val viewportCenter = (layoutInfo.viewportStartOffset + layoutInfo.viewportEndOffset) / 2f
+    val itemCenter = item.offset + item.size / 2f
+    val delta = itemCenter - viewportCenter
+    if (delta != 0f) animateScrollBy(delta)
+}
+
+@Composable
+private fun LyricSupplementalLine(
+    text: String,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Text(
+        text = text,
+        style = MiuixTheme.textStyles.body2,
+        color = color,
+        modifier = modifier.fillMaxWidth()
+    )
 }
 
 @Composable
@@ -298,5 +598,29 @@ private fun playbackStateText(state: Int): String = when (state) {
 private fun formatDuration(value: Long): String {
     if (value <= 0L) return "00:00"
     val totalSeconds = value / 1000L
-    return "%02d:%02d".format(totalSeconds / 60L, totalSeconds % 60L)
+    return "%02d:%02d".format(Locale.ROOT, totalSeconds / 60L, totalSeconds % 60L)
 }
+
+private fun formatLyricTimestamp(value: Long): String {
+    val safeValue = value.coerceAtLeast(0L)
+    val minutes = safeValue / 60_000L
+    val seconds = (safeValue / 1_000L) % 60L
+    val milliseconds = safeValue % 1_000L
+    return "%02d:%02d.%03d".format(Locale.ROOT, minutes, seconds, milliseconds)
+}
+
+private fun formatWordDuration(value: Long): String {
+    val duration = value.coerceAtLeast(0L)
+    return if (duration < 1_000L) {
+        "${duration}ms"
+    } else {
+        "%.2fs".format(Locale.ROOT, duration / 1_000f)
+    }
+}
+
+private fun LyricInfoDocument?.lyricInfoValue(key: String): String =
+    this?.fields
+        ?.firstOrNull { it.key == key }
+        ?.value
+        ?.trim()
+        .orEmpty()
