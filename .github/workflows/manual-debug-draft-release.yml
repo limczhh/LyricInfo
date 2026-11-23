@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       build_debug:
-        description: '构建 :debug 模块（Debug）'
+        description: '构建 :debug 模块（Release）'
         required: false
         default: true
         type: boolean
@@ -61,7 +61,7 @@ jobs:
           SELECTED_MODULES=()
 
           if [[ "$BUILD_DEBUG" == "true" ]]; then
-            GRADLE_TASKS+=(":debug:assembleDebug")
+            GRADLE_TASKS+=(":debug:assembleRelease")
             SELECTED_MODULES+=("debug")
           fi
           if [[ "$BUILD_APP" == "true" ]]; then
@@ -177,7 +177,7 @@ jobs:
             fi
 
             case "$module" in
-              debug) apk_dir="debug/build/outputs/apk/debug" ;;
+              debug) apk_dir="debug/build/outputs/apk/release" ;;
               app|lite) apk_dir="$module/build/outputs/apk/release" ;;
             esac
             mapfile -t apk_files < <(find "$apk_dir" -maxdepth 1 -type f -name '*.apk' -print | sort)
