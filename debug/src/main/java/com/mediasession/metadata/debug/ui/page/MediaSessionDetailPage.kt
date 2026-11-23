@@ -43,11 +43,17 @@ fun MediaSessionDetailPage(sessionKey: String, onBack: () -> Unit) {
     val persistedTabIndex = remember(context) {
         DebugPreferences.lastSelectedDetailTab(context)
     }
+    val persistedFullLyricsExpanded = remember(context, sessionKey) {
+        DebugPreferences.fullLyricsExpanded(context, sessionKey)
+    }
     var record by remember(sessionKey) {
         mutableStateOf(MediaSessionRepository.find(sessionKey))
     }
     var selectedTabIndex by rememberSaveable(sessionKey) {
         mutableIntStateOf(persistedTabIndex)
+    }
+    var fullLyricsExpanded by rememberSaveable(sessionKey) {
+        mutableStateOf(persistedFullLyricsExpanded)
     }
     val metadataListState = rememberLazyListState()
     val lyricsListState = rememberLazyListState()
@@ -166,7 +172,16 @@ fun MediaSessionDetailPage(sessionKey: String, onBack: () -> Unit) {
                             listState = lyricsListState,
                             scrollBehavior = scrollBehavior,
                             topPadding = innerPadding.calculateTopPadding(),
-                            bottomPadding = innerPadding.calculateBottomPadding() + 16.dp
+                            bottomPadding = innerPadding.calculateBottomPadding() + 16.dp,
+                            fullLyricsExpanded = fullLyricsExpanded,
+                            onFullLyricsExpandedChange = { expanded ->
+                                fullLyricsExpanded = expanded
+                                DebugPreferences.setFullLyricsExpanded(
+                                    context = context,
+                                    sessionKey = sessionKey,
+                                    expanded = expanded
+                                )
+                            }
                         )
                     }
                 }
